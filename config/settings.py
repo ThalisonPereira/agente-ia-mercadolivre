@@ -84,3 +84,20 @@ class AnthropicConfig:
 def carregar_configuracao_anthropic() -> AnthropicConfig:
     """Lê e valida a chave de API da Anthropic."""
     return AnthropicConfig(api_key=_obter_variavel_obrigatoria("ANTHROPIC_API_KEY"))
+
+
+@dataclass(frozen=True)
+class TursoConfig:
+    """Credenciais do banco de dados hospedado (Turso/libSQL) - fonte de verdade
+    dos dados, acessível tanto pela coleta local quanto pelo chat na nuvem."""
+
+    database_url: str
+    auth_token: str
+
+
+def carregar_configuracao_turso() -> TursoConfig:
+    """Lê e valida as credenciais do Turso."""
+    return TursoConfig(
+        database_url=_obter_variavel_obrigatoria("TURSO_DATABASE_URL"),
+        auth_token=_obter_variavel_obrigatoria("TURSO_AUTH_TOKEN"),
+    )

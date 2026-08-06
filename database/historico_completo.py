@@ -1,27 +1,17 @@
 """
 database/historico_completo.py
 
-Busca todo o histórico já registrado (todos os dias, todos os anúncios),
-usado para publicar numa aba dedicada da planilha - essa aba serve de
-"memória" para o chat de IA na planilha (Apps Script) responder perguntas
-sobre qualquer período já coletado, não só o snapshot mais recente.
+Utilitário usado pelo backfill para saber quais dias já foram coletados
+(database/historico_completo.py::obter_datas_existentes) e evitar refazer
+trabalho. A função obter_historico_completo() que existia aqui foi removida
+- ela lia todo o histórico (todos os dias x todos os anúncios) pra publicar
+numa aba "Histórico Completo" do Sheets e alimentar o chat antigo, que
+mandava esse histórico inteiro como contexto em cada pergunta (caro e não
+escala). O chat atual (agents/assistente_ia.py) consulta o banco de dados
+direto, com ferramentas que buscam só o pedaço de dado necessário.
 """
 
-from database.conexao import obter_conexao
-
-QUERY_HISTORICO_COMPLETO = """
-SELECT
-    h.data_snapshot,
-    a.titulo,
-    a.sku,
-    h.item_id,
-    h.visitas,
-    h.vendas_quantidade,
-    h.receita
-FROM historico_anuncios_diario h
-LEFT JOIN anuncios a ON a.item_id = h.item_id
-ORDER BY h.data_snapshot, a.titulo
-"""
+from database.conexao_turso import obter_conexao
 
 
 def obter_datas_existentes() -> set[str]:
@@ -32,25 +22,3 @@ def obter_datas_existentes() -> set[str]:
     finally:
         conexao.close()
     return {linha["data_snapshot"] for linha in linhas}
-
-
-def obter_historico_completo() -> list[dict]:
-    """Retorna uma linha por (dia, anúncio) já registrado no banco local, em ordem cronológica."""
-    conexao = obter_conexao()
-    try:
-        linhas = conexao.execute(QUERY_HISTORICO_COMPLETO).fetchall()
-    finally:
-        conexao.close()
-
-    return [
-        {
-            "data": linha["data_snapshot"],
-            "anuncio": linha["titulo"] or linha["item_id"],
-            "sku": linha["sku"] or "",
-            "item_id": linha["item_id"],
-            "visitas": linha["visitas"],
-            "vendas": linha["vendas_quantidade"],
-            "receita": linha["receita"],
-        }
-        for linha in linhas
-    ]

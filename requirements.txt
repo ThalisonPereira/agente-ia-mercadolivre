@@ -12,7 +12,13 @@ gspread==6.2.1
 google-auth==2.56.2
 
 # SDK oficial da Anthropic - usado na camada de análise de IA (agents/analista_ia.py)
-anthropic>=0.68.0
+# e no assistente com tool-calling (agents/assistente_ia.py, precisa do Tool Runner)
+anthropic>=0.120.0
 
 # Interface web do chat de IA (chat_app.py), hospedável de graça no Streamlit Community Cloud
 streamlit>=1.38.0
+
+# Cliente do banco de dados hospedado (Turso/libSQL) - fala o protocolo Hrana via
+# HTTP/websocket puro Python, sem precisar compilar extensão nativa (o pacote
+# alternativo `libsql` requer toolchain Rust e não tem wheel pra todas as plataformas)
+libsql-client>=0.3.1

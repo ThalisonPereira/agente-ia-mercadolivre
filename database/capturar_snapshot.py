@@ -9,7 +9,7 @@ dados na API do Mercado Livre.
 
 from datetime import date, datetime
 
-from database.conexao import obter_conexao
+from database.conexao_turso import obter_conexao
 from database.esquema import criar_tabelas
 
 UPSERT_ANUNCIO = """
@@ -51,21 +51,26 @@ def capturar_snapshot_diario(dados_anuncios: list[dict], dia: date | None = None
 
     conexao = obter_conexao()
     try:
+        # Manda tudo em poucas requisições em lote, em vez de uma requisição
+        # HTTP por upsert (~380 chamadas sequenciais já esbarraram num
+        # timeout de rede isolado na prática) - mais rápido e mais confiável.
+        instrucoes = []
         for item in dados_anuncios:
-            conexao.execute(UPSERT_ANUNCIO, {
+            instrucoes.append((UPSERT_ANUNCIO, {
                 "item_id": item["item_id"],
                 "titulo": item["titulo"],
                 "sku": item.get("sku", ""),
                 "atualizado_em": agora,
-            })
-            conexao.execute(UPSERT_SNAPSHOT, {
+            }))
+            instrucoes.append((UPSERT_SNAPSHOT, {
                 "item_id": item["item_id"],
                 "data_snapshot": data_snapshot,
                 "visitas": item["visitas"],
                 "vendas_quantidade": item["vendas_quantidade"],
                 "receita": item["receita"],
                 "capturado_em": agora,
-            })
+            }))
+        conexao.executar_em_lote(instrucoes)
         conexao.commit()
         print(f"Snapshot de {data_snapshot} registrado para {len(dados_anuncios)} anúncio(s).")
     finally:

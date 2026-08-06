@@ -6,7 +6,7 @@ vendas por anúncio, calcula a variação percentual e classifica cada anúncio
 em 'Queda', 'Alta' ou 'Estável'.
 """
 
-from database.conexao import obter_conexao
+from database.conexao_turso import obter_conexao
 
 QUERY_COMPARACAO = """
 SELECT

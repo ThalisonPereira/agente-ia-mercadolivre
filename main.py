@@ -16,12 +16,11 @@ from integrations.ml_client import listar_itens_ativos, obter_detalhes_itens, ob
 from integrations.google_sheets import (
     publicar_resultado_no_sheets,
     publicar_analise_no_sheets,
-    publicar_historico_completo_no_sheets,
     testar_conexao_sheets,
 )
 from database.capturar_snapshot import capturar_snapshot_diario
 from database.analisar_variacao import obter_variacao_anuncios
-from database.historico_completo import obter_historico_completo, obter_datas_existentes
+from database.historico_completo import obter_datas_existentes
 from agents.analista_ia import analisar_e_salvar
 
 
@@ -186,10 +185,6 @@ if __name__ == "__main__":
         else:
             _backfill_periodo(date.fromisoformat(sys.argv[2]), date.fromisoformat(sys.argv[3]))
 
-    elif comando == "publicar_historico":
-        historico = obter_historico_completo()
-        publicar_historico_completo_no_sheets(historico)
-
     elif comando == "analisar_variacao":
         resultado = obter_variacao_anuncios()
         if resultado is None:
@@ -204,5 +199,5 @@ if __name__ == "__main__":
 
     else:
         print("Uso: python main.py [config|passo1|passo2 <code>|passo3|testar_sheets|"
-              "coletar_snapshot|backfill <inicio> <fim>|publicar_historico|"
+              "coletar_snapshot|backfill <inicio> <fim>|"
               "analisar_variacao|rotina_diaria]")
