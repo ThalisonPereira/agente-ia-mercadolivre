@@ -76,11 +76,17 @@ def _responder(pergunta: str, contexto_historico: str, contexto_analise: str) ->
 
     resposta = client.messages.create(
         model=MODELO,
-        max_tokens=1024,
+        # Com um contexto grande (300K+ tokens de histórico), o modelo gasta
+        # parte do orçamento de tokens "pensando" antes de escrever a
+        # resposta - um max_tokens baixo corta antes de gerar texto visível.
+        max_tokens=4096,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": mensagem_usuario}],
     )
-    return next((bloco.text for bloco in resposta.content if bloco.type == "text"), "")
+    texto = next((bloco.text for bloco in resposta.content if bloco.type == "text"), "")
+    if not texto:
+        return f"(sem resposta em texto - motivo de parada: {resposta.stop_reason})"
+    return texto
 
 
 st.set_page_config(page_title="Assistente IA - Anúncios", page_icon="🤖")
