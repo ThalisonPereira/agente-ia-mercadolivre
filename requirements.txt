@@ -1,0 +1,18 @@
+# Dependências do agente de IA para Mercado Livre.
+# Instalar com: pip install -r requirements.txt
+
+# Requisições HTTP - usada para falar com a API do Mercado Livre (OAuth2 + endpoints REST)
+requests==2.32.3
+
+# Leitura de variáveis de ambiente a partir de um arquivo .env
+python-dotenv==1.0.1
+
+# Publicação dos resultados no Google Sheets
+gspread==6.2.1
+google-auth==2.56.2
+
+# SDK oficial da Anthropic - usado na camada de análise de IA (agents/analista_ia.py)
+anthropic>=0.68.0
+
+# Interface web do chat de IA (chat_app.py), hospedável de graça no Streamlit Community Cloud
+streamlit>=1.38.0

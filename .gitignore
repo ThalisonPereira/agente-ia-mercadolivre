@@ -1,0 +1,25 @@
+# Segredos e ambiente
+.env
+.venv/
+venv/
+
+# Banco de dados local
+*.db
+*.sqlite3
+
+# Relatórios gerados
+reports/*.md
+reports/*.txt
+
+# Cache Python
+__pycache__/
+*.pyc
+
+config/.ml_tokens.json
+config/google_service_account.json
+
+# Segredos do chat web (Streamlit) - o .example fica no Git, o real nunca
+.streamlit/secrets.toml
+
+# Configuração local do Claude Code (específica desta máquina)
+.claude/settings.local.json
