@@ -20,7 +20,7 @@ import gspread
 import streamlit as st
 from google.oauth2.service_account import Credentials
 
-MODELO = "claude-haiku-4-5"
+MODELO = "claude-sonnet-5"  # janela de contexto de 1M tokens (Haiku 4.5 tem só 200K, insuficiente pro histórico completo)
 ESCOPOS = ["https://www.googleapis.com/auth/spreadsheets"]
 ABA_HISTORICO = "Histórico Completo"
 ABA_ANALISE = "Análise IA"
