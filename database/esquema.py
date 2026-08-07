@@ -88,6 +88,42 @@ CREATE TABLE IF NOT EXISTS pedidos (
 );
 """
 
+# Cache local do custo de produto do Bling (fonte: GET /produtos, campo
+# precoCusto), sincronizado 1x por dia junto da rotina - não é uma tabela
+# multi-conta, o Bling é uma credencial única compartilhada (ver
+# integrations/bling.py). sku é a mesma convenção de código usada no
+# Mercado Livre (seller_sku).
+CRIAR_TABELA_CUSTO_PRODUTOS = """
+CREATE TABLE IF NOT EXISTS custo_produtos (
+    sku               TEXT PRIMARY KEY,
+    produto_id_bling  TEXT,
+    nome              TEXT,
+    preco_custo       REAL,
+    atualizado_em     TEXT
+);
+"""
+
+# Extrato diário de margem por venda (linha de pedido/SKU) - valores BRUTOS
+# capturados (preço, comissão, frete); imposto e margem são calculados na
+# consulta (database/extrato.py), não aqui, pra poder ajustar a alíquota
+# sem precisar reprocessar dados já coletados.
+CRIAR_TABELA_ITENS_VENDA = """
+CREATE TABLE IF NOT EXISTS itens_venda (
+    conta_id         TEXT,
+    pedido_id        TEXT,
+    item_id          TEXT,
+    sku              TEXT,
+    titulo           TEXT,
+    data_venda       TEXT,
+    quantidade       INTEGER,
+    preco_venda      REAL,
+    comissao_ml      REAL,
+    frete_vendedor   REAL,
+    capturado_em     TEXT,
+    PRIMARY KEY (conta_id, pedido_id, item_id)
+);
+"""
+
 
 def criar_tabelas() -> None:
     """Cria todas as tabelas do banco, se ainda não existirem."""
@@ -99,10 +135,12 @@ def criar_tabelas() -> None:
         conexao.execute(CRIAR_TABELA_ANALISES_DIARIAS)
         conexao.execute(CRIAR_TABELA_TOKENS_OAUTH)
         conexao.execute(CRIAR_TABELA_PEDIDOS)
+        conexao.execute(CRIAR_TABELA_CUSTO_PRODUTOS)
+        conexao.execute(CRIAR_TABELA_ITENS_VENDA)
         conexao.commit()
         print(
             "Tabelas prontas: contas, anuncios, historico_anuncios_diario, "
-            "analises_diarias, tokens_oauth, pedidos."
+            "analises_diarias, tokens_oauth, pedidos, custo_produtos, itens_venda."
         )
     finally:
         conexao.close()

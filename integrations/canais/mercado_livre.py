@@ -311,6 +311,19 @@ class MercadoLivreCanal:
             "logistic_type": corpo.get("logistic_type"),
         }
 
+    def _obter_custo_frete_vendedor(self, shipping_id: int) -> float:
+        """
+        GET /shipments/{id}/costs - retorna o custo do frete separado por
+        quem paga (senders = vendedor, receiver = comprador). Diferente do
+        'shipping_option.cost' do endpoint de status (esse é o valor pago
+        pelo comprador) - aqui pegamos o que sai do bolso do vendedor,
+        somando todos os 'senders' (normalmente só 1).
+        """
+        resposta = self._get_com_retry(f"{BASE_URL}/shipments/{shipping_id}/costs", params={})
+        resposta.raise_for_status()
+        corpo = resposta.json()
+        return sum(sender.get("cost", 0.0) for sender in corpo.get("senders", []))
+
     # ------------------------------------------------------------------
     # Interface comum de canal
     # ------------------------------------------------------------------
@@ -380,5 +393,55 @@ class MercadoLivreCanal:
                 "valor_total": pedido.get("total_amount", 0.0),
                 **status_envio,
             })
+
+        return resultado
+
+    def coletar_extrato_do_dia(self, dia: date) -> list[dict]:
+        """
+        Busca os pedidos pagos de um dia calendário completo e monta uma
+        linha por item vendido (SKU), com os valores brutos necessários
+        pro cálculo de margem em database/extrato.py: preço de venda,
+        comissão do Mercado Livre e frete pago pelo vendedor.
+
+        'sale_fee' é tratado aqui como valor POR UNIDADE (mesma convenção
+        de 'unit_price') - ainda sem um pedido real com quantity > 1 pra
+        confirmar isso com certeza; se aparecer um caso assim e a conta
+        não bater, é o primeiro lugar a revisar.
+
+        Quando um pedido tem mais de 1 item share do mesmo envio, o custo
+        de frete do pedido é rateado proporcionalmente ao valor de venda
+        de cada item.
+        """
+        seller_id = self.obter_id_vendedor()
+
+        pedidos_data_de = f"{dia.isoformat()}T00:00:00.000-00:00"
+        pedidos_data_ate = f"{dia.isoformat()}T23:59:59.000-00:00"
+        pedidos = self._obter_pedidos_periodo(seller_id, pedidos_data_de, pedidos_data_ate)
+
+        resultado = []
+        for pedido in pedidos:
+            itens = pedido.get("order_items", [])
+            if not itens:
+                continue
+
+            shipping_id = pedido.get("shipping", {}).get("id")
+            frete_pedido = self._obter_custo_frete_vendedor(shipping_id) if shipping_id else 0.0
+
+            precos_dos_itens = [item.get("unit_price", 0) * item.get("quantity", 0) for item in itens]
+            soma_precos = sum(precos_dos_itens) or 1  # evita divisão por zero
+
+            for item, preco_item in zip(itens, precos_dos_itens):
+                quantidade = item.get("quantity", 0)
+                frete_alocado = frete_pedido * (preco_item / soma_precos)
+                resultado.append({
+                    "pedido_id": str(pedido["id"]),
+                    "item_id": str(item.get("item", {}).get("id")),
+                    "sku": item.get("item", {}).get("seller_sku") or "",
+                    "titulo": item.get("item", {}).get("title", ""),
+                    "quantidade": quantidade,
+                    "preco_venda": preco_item,
+                    "comissao_ml": item.get("sale_fee", 0.0) * quantidade,
+                    "frete_vendedor": frete_alocado,
+                })
 
         return resultado

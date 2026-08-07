@@ -18,6 +18,8 @@ from anthropic import beta_tool
 from database.analisar_variacao import obter_variacao_anuncios
 from database.analises_diarias import obter_ultima_analise
 from database.consultar_anuncio import buscar_por_sku_ou_titulo
+from database.extrato import obter_data_mais_recente as obter_data_mais_recente_extrato
+from database.extrato import obter_resumo_extrato
 from database.pedidos import obter_data_mais_recente as obter_data_mais_recente_pedidos
 from database.pedidos import obter_resumo as obter_resumo_pedidos
 from database.ranking import obter_ranking
@@ -167,7 +169,41 @@ def pedidos_do_dia(conta_id: str = "", canal: str = "") -> str:
     )
 
 
-FERRAMENTAS = [consultar_sku, variacao_recente, ranking_periodo, ultima_analise, pedidos_do_dia]
+@beta_tool
+def extrato_do_dia(conta_id: str = "", canal: str = "") -> str:
+    """Retorna o extrato de margem do dia mais recente coletado: total
+    vendido, comissão do Mercado Livre, frete pago pelo vendedor, imposto
+    estimado (14% sobre o preço de venda) e a margem líquida (já
+    descontando o custo do produto, vindo do Bling). Itens cujo SKU não
+    foi encontrado no Bling (ou tem custo zerado) ficam de fora do total
+    de margem, pra não distorcer o número - o total de itens nessa
+    situação é informado à parte.
+
+    Args:
+        conta_id: Restringe a uma conta específica (ex: "hc"), opcional.
+        canal: Restringe a um canal inteiro (ex: "mercado_livre", "shopee", "amazon"), opcional.
+    """
+    data = obter_data_mais_recente_extrato(conta_id or None, canal or None)
+    if data is None:
+        return "Ainda não há extrato de vendas coletado para esse filtro."
+
+    resumo = obter_resumo_extrato(data, conta_id or None, canal or None)
+    aviso_custo = (
+        f" {resumo['itens_sem_custo']} item(ns) sem custo encontrado no Bling, excluído(s) da margem."
+        if resumo["itens_sem_custo"]
+        else ""
+    )
+    return (
+        f"Extrato de {data}: {resumo['total_itens']} item(ns) vendido(s), "
+        f"R$ {resumo['total_vendido']:.2f} em vendas, R$ {resumo['total_comissao']:.2f} de comissão ML, "
+        f"R$ {resumo['total_frete']:.2f} de frete, R$ {resumo['total_imposto']:.2f} de imposto estimado, "
+        f"margem líquida de R$ {resumo['total_margem']:.2f}.{aviso_custo}"
+    )
+
+
+FERRAMENTAS = [
+    consultar_sku, variacao_recente, ranking_periodo, ultima_analise, pedidos_do_dia, extrato_do_dia,
+]
 
 
 def responder_pergunta(

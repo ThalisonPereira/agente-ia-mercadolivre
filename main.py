@@ -22,6 +22,8 @@ from database.capturar_snapshot import capturar_snapshot_diario
 from database.analisar_variacao import obter_variacao_anuncios
 from database.historico_completo import obter_datas_existentes
 from database.pedidos import salvar_pedidos_do_dia
+from database.custo_produtos import sincronizar as sincronizar_custo_produtos
+from database.extrato import salvar_itens_venda_do_dia
 from agents.analista_ia import analisar_e_salvar
 
 
@@ -100,6 +102,14 @@ def _rotina_diaria() -> None:
         print("Nenhuma conta ativa cadastrada. Rode 'python main.py cadastrar_conta <id> <canal> <nome>' primeiro.")
         return
 
+    # O Bling não é por conta (credencial única, ver integrations/bling.py) -
+    # sincroniza o custo de produto 1x por rodada, antes do loop por conta.
+    try:
+        produtos_bling = BlingClient().listar_produtos()
+        sincronizar_custo_produtos(produtos_bling)
+    except Exception as erro:
+        print(f"Falha ao sincronizar produtos do Bling: {erro}")
+
     for conta in contas:
         conta_id, canal = conta["conta_id"], conta["canal"]
         print(f"\n=== Conta: {conta_id} ({canal}) ===")
@@ -122,6 +132,14 @@ def _rotina_diaria() -> None:
             print(f"[conta: {conta_id}] {erro}")
         except Exception as erro:
             print(f"[conta: {conta_id}] Falha ao coletar pedidos: {erro}")
+
+        try:
+            itens_venda = obter_adaptador(conta_id, canal).coletar_extrato_do_dia(dia)
+            salvar_itens_venda_do_dia(conta_id, itens_venda, dia)
+        except NotImplementedError as erro:
+            print(f"[conta: {conta_id}] {erro}")
+        except Exception as erro:
+            print(f"[conta: {conta_id}] Falha ao coletar extrato de vendas: {erro}")
 
         variacao = obter_variacao_anuncios(conta_id=conta_id)
         if variacao is None:

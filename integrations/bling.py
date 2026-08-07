@@ -44,6 +44,14 @@ CONTA_ID_BLING = "bling"
 MARGEM_SEGURANCA_SEGUNDOS = 60
 MAX_TENTATIVAS_RATE_LIMIT = 5
 
+# Máximo de produtos por página aceito pela API do Bling.
+REGISTROS_POR_PAGINA = 100
+
+# Pausa entre páginas, em segundos - o Bling permite até 3 chamadas/segundo;
+# margem de segurança bem menor que o limite (mesmo valor já comprovado no
+# projeto analista-estoque-ia).
+PAUSA_ENTRE_REQUISICOES = 0.4
+
 
 class BlingClient:
     """Cliente OAuth2 do Bling - credencial única, sem conta_id."""
@@ -133,6 +141,49 @@ class BlingClient:
         if produtos:
             print("\nJSON bruto do primeiro produto:\n")
             print(json.dumps(produtos[0], indent=2, ensure_ascii=False, default=str))
+
+    # ------------------------------------------------------------------
+    # Leitura de produtos (fonte do custo por SKU)
+    # ------------------------------------------------------------------
+
+    def listar_produtos(self) -> list[dict]:
+        """
+        Busca todos os produtos cadastrados no Bling, percorrendo todas as
+        páginas automaticamente. Cada item traz (entre outros campos)
+        'codigo' (SKU), 'nome' e 'precoCusto' - já confirmados via chamada
+        real (ver testar_chamada_real()).
+
+        Produtos "pai" (kits/variações, têm idProdutoPai) vêm com
+        precoCusto=0 - o custo real fica nas variações filhas. Não filtramos
+        isso aqui; quem consome a lista (database/custo_produtos.py) decide
+        como tratar custo zero.
+        """
+        headers = {"Authorization": f"Bearer {self._token_valido()}"}
+        todos_os_produtos: list[dict] = []
+        pagina = 1
+
+        while True:
+            resposta = requests.get(
+                f"{BASE_URL}/produtos",
+                headers=headers,
+                params={"pagina": pagina, "limite": REGISTROS_POR_PAGINA},
+                timeout=15,
+            )
+
+            if resposta.status_code != 200:
+                print(f"Erro ao buscar página {pagina} de produtos (status {resposta.status_code}): {resposta.text}")
+                break
+
+            produtos_da_pagina = resposta.json().get("data", [])
+            todos_os_produtos.extend(produtos_da_pagina)
+
+            if len(produtos_da_pagina) < REGISTROS_POR_PAGINA:
+                break
+
+            pagina += 1
+            time.sleep(PAUSA_ENTRE_REQUISICOES)
+
+        return todos_os_produtos
 
     # ------------------------------------------------------------------
     # Gerenciamento de token (mesmo padrão de MercadoLivreCanal)
