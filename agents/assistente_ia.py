@@ -173,11 +173,12 @@ def pedidos_do_dia(conta_id: str = "", canal: str = "") -> str:
 def extrato_do_dia(conta_id: str = "", canal: str = "") -> str:
     """Retorna o extrato de margem do dia mais recente coletado: total
     vendido, comissão do Mercado Livre, frete pago pelo vendedor, imposto
-    estimado (14% sobre o preço de venda) e a margem líquida (já
-    descontando o custo do produto, vindo do Bling). Itens cujo SKU não
-    foi encontrado no Bling (ou tem custo zerado) ficam de fora do total
-    de margem, pra não distorcer o número - o total de itens nessa
-    situação é informado à parte.
+    estimado (14% sobre o preço de venda), a margem líquida em reais (já
+    descontando o custo do produto, vindo do Bling) e também em
+    porcentagem (margem de contribuição). Itens cujo SKU não foi
+    encontrado no Bling (ou tem custo zerado) ficam de fora do total de
+    margem, pra não distorcer o número - o total de itens nessa situação
+    é informado à parte.
 
     Args:
         conta_id: Restringe a uma conta específica (ex: "hc"), opcional.
@@ -193,12 +194,14 @@ def extrato_do_dia(conta_id: str = "", canal: str = "") -> str:
         if resumo["itens_sem_custo"]
         else ""
     )
+    margem_pct = f"{resumo['margem_percentual']:.1f}%" if resumo["margem_percentual"] is not None else "indisponível"
     return (
         f"Extrato de {data}: {resumo['total_itens']} item(ns) vendido(s), "
         f"R$ {resumo['total_vendido']:.2f} em vendas, R$ {resumo['total_comissao']:.2f} de comissão ML, "
         f"R$ {resumo['total_frete']:.2f} de frete, valor líquido sem imposto de R$ {resumo['total_liquido_sem_imposto']:.2f}, "
         f"R$ {resumo['total_imposto']:.2f} de imposto estimado, "
-        f"margem líquida (já descontando o custo do produto) de R$ {resumo['total_margem']:.2f}.{aviso_custo}"
+        f"margem líquida (já descontando o custo do produto) de R$ {resumo['total_margem']:.2f}, "
+        f"equivalente a {margem_pct} de margem de contribuição sobre o valor vendido.{aviso_custo}"
     )
 
 

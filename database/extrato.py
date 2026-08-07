@@ -121,6 +121,8 @@ def _calcular_linha(linha) -> dict:
     imposto = preco_venda * ALIQUOTA_IMPOSTO
     valor_liquido = valor_liquido_sem_imposto - imposto
     margem = (valor_liquido - custo_produto) if custo_produto is not None else None
+    # Margem de contribuição em % - lucro da venda sobre o preço de venda bruto.
+    margem_percentual = (margem / preco_venda * 100) if margem is not None and preco_venda else None
 
     return {
         "conta_id": linha["conta_id"],
@@ -136,6 +138,7 @@ def _calcular_linha(linha) -> dict:
         "valor_liquido": round(valor_liquido, 2),
         "custo_produto": custo_produto,
         "margem": round(margem, 2) if margem is not None else None,
+        "margem_percentual": round(margem_percentual, 1) if margem_percentual is not None else None,
     }
 
 
@@ -175,8 +178,10 @@ def obter_resumo_extrato(data: str, conta_id: str | None = None, canal: str | No
         "total_imposto": 0.0,
         "total_custo": 0.0,
         "total_margem": 0.0,
+        "margem_percentual": None,
         "itens_sem_custo": 0,
     }
+    vendido_com_custo_conhecido = 0.0
     for item in itens:
         resumo["total_vendido"] += item["preco_venda"]
         resumo["total_comissao"] += item["comissao_ml"]
@@ -188,5 +193,12 @@ def obter_resumo_extrato(data: str, conta_id: str | None = None, canal: str | No
         else:
             resumo["total_custo"] += item["custo_produto"]
             resumo["total_margem"] += item["margem"]
+            vendido_com_custo_conhecido += item["preco_venda"]
+
+    # Percentual calculado sobre o valor vendido dos itens com custo
+    # conhecido (não sobre total_vendido) - senão itens sem custo
+    # diluiriam o percentual sem entrar na margem em R$.
+    if vendido_com_custo_conhecido:
+        resumo["margem_percentual"] = round(resumo["total_margem"] / vendido_com_custo_conhecido * 100, 1)
 
     return resumo

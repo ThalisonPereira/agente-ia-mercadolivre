@@ -30,11 +30,15 @@ st.caption(f"Snapshot de {data_maxima} - imposto estimado em {ALIQUOTA_IMPOSTO:.
 
 resumo = obter_resumo_extrato(data_maxima, conta_id, canal)
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("Total vendido", f"R$ {resumo['total_vendido']:,.2f}")
 col2.metric("Comissão + Frete", f"R$ {resumo['total_comissao'] + resumo['total_frete']:,.2f}")
 col3.metric("Imposto (14%)", f"R$ {resumo['total_imposto']:,.2f}")
 col4.metric("Margem líquida", f"R$ {resumo['total_margem']:,.2f}")
+col5.metric(
+    "Margem de contribuição",
+    f"{resumo['margem_percentual']:.1f}%" if resumo["margem_percentual"] is not None else "—",
+)
 
 if resumo["itens_sem_custo"]:
     st.warning(
@@ -51,7 +55,7 @@ if itens:
         df,
         column_order=[
             "sku", "titulo", "quantidade", "preco_venda", "comissao_ml", "frete_vendedor",
-            "valor_liquido_sem_imposto", "imposto", "valor_liquido", "custo_produto", "margem",
+            "valor_liquido_sem_imposto", "imposto", "valor_liquido", "custo_produto", "margem", "margem_percentual",
         ],
         column_config={
             "sku": st.column_config.TextColumn("SKU", help="Código do produto no momento da venda - ⚠️ significa que não foi encontrado (ou tinha custo zerado) no Bling."),
@@ -65,6 +69,7 @@ if itens:
             "valor_liquido": st.column_config.NumberColumn("Valor Líquido", format="R$ %.2f", help="Valor líquido (sem imposto) menos o imposto estimado - o que sobra da venda antes do custo do produto."),
             "custo_produto": st.column_config.NumberColumn("Custo", format="R$ %.2f", help="Custo do produto cadastrado no Bling (campo precoCusto), pelo SKU."),
             "margem": st.column_config.NumberColumn("Margem", format="R$ %.2f", help="Lucro real da venda: valor líquido menos o custo do produto."),
+            "margem_percentual": st.column_config.NumberColumn("Margem %", format="%.1f%%", help="Margem de contribuição: margem (R$) dividida pelo preço de venda bruto, em %."),
         },
         hide_index=True,
         use_container_width=True,
