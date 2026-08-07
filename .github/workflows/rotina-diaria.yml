@@ -1,0 +1,44 @@
+name: Rotina diária
+
+# Roda a coleta + comparação + Sheets + análise de IA (main.py rotina_diaria)
+# uma vez por dia, pra todas as contas ativas cadastradas no banco, sem
+# depender de alguém rodar manualmente. Ver database/contas.py e
+# main.py::_rotina_diaria().
+on:
+  schedule:
+    # 08:00 UTC = 05:00 no horário de Brasília (sem horário de verão) - roda
+    # bem depois da meia-noite em Brasília, garantindo que "ontem" já é um
+    # dia calendário completo antes de coletar.
+    - cron: "0 8 * * *"
+  workflow_dispatch: {}  # permite rodar manualmente pela aba Actions do GitHub
+
+jobs:
+  rotina-diaria:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Escrever credencial do Google Sheets
+        run: echo "$GOOGLE_SERVICE_ACCOUNT_JSON" > config/google_service_account.json
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+
+      - name: Rodar rotina diária
+        env:
+          ML_CLIENT_ID: ${{ secrets.ML_CLIENT_ID }}
+          ML_CLIENT_SECRET: ${{ secrets.ML_CLIENT_SECRET }}
+          ML_REDIRECT_URI: ${{ secrets.ML_REDIRECT_URI }}
+          GOOGLE_SHEETS_ID: ${{ secrets.GOOGLE_SHEETS_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: python main.py rotina_diaria
