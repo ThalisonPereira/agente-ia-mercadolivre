@@ -36,6 +36,7 @@ paginas = st.navigation([
     st.Page("paginas/2_ranking.py", title="Ranking", icon="🏆"),
     st.Page("paginas/3_variacao.py", title="Variação", icon="📈"),
     st.Page("paginas/4_consultar_anuncio.py", title="Consultar Anúncio", icon="🔍"),
+    st.Page("paginas/6_pedidos.py", title="Pedidos", icon="📦"),
     st.Page("paginas/5_chat_ia.py", title="Chat IA", icon="🤖"),
 ])
 paginas.run()

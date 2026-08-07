@@ -18,6 +18,8 @@ from anthropic import beta_tool
 from database.analisar_variacao import obter_variacao_anuncios
 from database.analises_diarias import obter_ultima_analise
 from database.consultar_anuncio import buscar_por_sku_ou_titulo
+from database.pedidos import obter_data_mais_recente as obter_data_mais_recente_pedidos
+from database.pedidos import obter_resumo as obter_resumo_pedidos
 from database.ranking import obter_ranking
 
 MODELO = "claude-sonnet-5"
@@ -140,7 +142,32 @@ def ultima_analise(conta_id: str = "") -> str:
     )
 
 
-FERRAMENTAS = [consultar_sku, variacao_recente, ranking_periodo, ultima_analise]
+@beta_tool
+def pedidos_do_dia(conta_id: str = "", canal: str = "") -> str:
+    """Retorna quantos pedidos (vendas/transações, não unidades) entraram
+    no dia mais recente coletado, e quantos estão em cada situação de
+    envio: prontos pra despachar agora (imediato), aguardando preparo
+    (postergado), já enviados, ou cancelados. O status é capturado no dia
+    do pedido e não é atualizado depois - reflete a foto daquele momento.
+
+    Args:
+        conta_id: Restringe a uma conta específica (ex: "hc"), opcional.
+        canal: Restringe a um canal inteiro (ex: "mercado_livre", "shopee", "amazon"), opcional.
+    """
+    data = obter_data_mais_recente_pedidos(conta_id or None, canal or None)
+    if data is None:
+        return "Ainda não há pedidos coletados para esse filtro."
+
+    resumo = obter_resumo_pedidos(data, conta_id or None, canal or None)
+    return (
+        f"Pedidos de {data}: {resumo['total']} no total, sendo "
+        f"{resumo['imediato']} prontos pra envio, {resumo['postergado']} aguardando preparo, "
+        f"{resumo['enviado']} já enviados e {resumo['cancelado']} cancelados. "
+        f"Valor total: R$ {resumo['valor_total']:.2f}."
+    )
+
+
+FERRAMENTAS = [consultar_sku, variacao_recente, ranking_periodo, ultima_analise, pedidos_do_dia]
 
 
 def responder_pergunta(

@@ -71,6 +71,23 @@ CREATE TABLE IF NOT EXISTS tokens_oauth (
 );
 """
 
+# Um pedido é capturado uma única vez, no dia em que foi criado (mesma
+# lógica de "ontem" usada pra visitas/vendas) - o status de envio reflete
+# o momento da coleta, não é atualizado depois (ver database/pedidos.py).
+CRIAR_TABELA_PEDIDOS = """
+CREATE TABLE IF NOT EXISTS pedidos (
+    conta_id          TEXT,
+    pedido_id         TEXT,
+    data_pedido       TEXT,
+    status_envio      TEXT,
+    substatus_envio   TEXT,
+    logistic_type     TEXT,
+    valor_total       REAL,
+    capturado_em      TEXT,
+    PRIMARY KEY (conta_id, pedido_id)
+);
+"""
+
 
 def criar_tabelas() -> None:
     """Cria todas as tabelas do banco, se ainda não existirem."""
@@ -81,7 +98,11 @@ def criar_tabelas() -> None:
         conexao.execute(CRIAR_TABELA_HISTORICO_DIARIO)
         conexao.execute(CRIAR_TABELA_ANALISES_DIARIAS)
         conexao.execute(CRIAR_TABELA_TOKENS_OAUTH)
+        conexao.execute(CRIAR_TABELA_PEDIDOS)
         conexao.commit()
-        print("Tabelas prontas: contas, anuncios, historico_anuncios_diario, analises_diarias, tokens_oauth.")
+        print(
+            "Tabelas prontas: contas, anuncios, historico_anuncios_diario, "
+            "analises_diarias, tokens_oauth, pedidos."
+        )
     finally:
         conexao.close()

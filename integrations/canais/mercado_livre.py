@@ -295,6 +295,22 @@ class MercadoLivreCanal:
 
         return pedidos
 
+    def _obter_status_envio(self, shipping_id: int) -> dict:
+        """
+        GET /shipments/{id} - o /orders/search só devolve o id do envio, não
+        o status; o status/substatus/tipo logístico vêm dessa chamada
+        separada, uma por pedido (volume diário baixo o suficiente pra não
+        precisar de lote/throttle como em _obter_visitas_itens).
+        """
+        resposta = self._get_com_retry(f"{BASE_URL}/shipments/{shipping_id}", params={})
+        resposta.raise_for_status()
+        corpo = resposta.json()
+        return {
+            "status_envio": corpo.get("status"),
+            "substatus_envio": corpo.get("substatus"),
+            "logistic_type": corpo.get("logistic_type"),
+        }
+
     # ------------------------------------------------------------------
     # Interface comum de canal
     # ------------------------------------------------------------------
@@ -340,3 +356,29 @@ class MercadoLivreCanal:
             })
 
         return dados_anuncios
+
+    def coletar_pedidos_do_dia(self, dia: date) -> list[dict]:
+        """
+        Busca os pedidos pagos de um dia calendário completo e o status de
+        envio de cada um, pra essa conta. Retorna uma lista de dicionários
+        com as chaves: pedido_id, status_envio, substatus_envio,
+        logistic_type, valor_total - formato que
+        database/pedidos.py::salvar_pedidos_do_dia() espera.
+        """
+        seller_id = self.obter_id_vendedor()
+
+        pedidos_data_de = f"{dia.isoformat()}T00:00:00.000-00:00"
+        pedidos_data_ate = f"{dia.isoformat()}T23:59:59.000-00:00"
+        pedidos = self._obter_pedidos_periodo(seller_id, pedidos_data_de, pedidos_data_ate)
+
+        resultado = []
+        for pedido in pedidos:
+            shipping_id = pedido.get("shipping", {}).get("id")
+            status_envio = self._obter_status_envio(shipping_id) if shipping_id else {}
+            resultado.append({
+                "pedido_id": str(pedido["id"]),
+                "valor_total": pedido.get("total_amount", 0.0),
+                **status_envio,
+            })
+
+        return resultado

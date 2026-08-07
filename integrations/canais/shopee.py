@@ -19,3 +19,10 @@ class ShopeeCanal:
             "Precisa cadastrar um app na Shopee Open Platform (partner_id/partner_key) "
             "antes de implementar este adaptador."
         )
+
+    def coletar_pedidos_do_dia(self, dia: date) -> list[dict]:
+        raise NotImplementedError(
+            "Integração com a Shopee ainda não foi implementada. "
+            "Precisa cadastrar um app na Shopee Open Platform (partner_id/partner_key) "
+            "antes de implementar este adaptador."
+        )

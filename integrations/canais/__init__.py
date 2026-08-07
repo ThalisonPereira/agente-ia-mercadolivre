@@ -35,6 +35,15 @@ class CanalAdapter(Protocol):
         """
         ...
 
+    def coletar_pedidos_do_dia(self, dia: date) -> list[dict]:
+        """
+        Retorna uma lista de dicionários (um por pedido pago desse dia,
+        dessa conta), cada um com as chaves: pedido_id, status_envio,
+        substatus_envio, logistic_type, valor_total - já no formato que
+        database/pedidos.py::salvar_pedidos_do_dia() espera.
+        """
+        ...
+
 
 def obter_adaptador(conta_id: str, canal: str) -> CanalAdapter:
     """

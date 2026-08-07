@@ -20,6 +20,7 @@ from database.contas import cadastrar_conta, obter_contas_ativas
 from database.capturar_snapshot import capturar_snapshot_diario
 from database.analisar_variacao import obter_variacao_anuncios
 from database.historico_completo import obter_datas_existentes
+from database.pedidos import salvar_pedidos_do_dia
 from agents.analista_ia import analisar_e_salvar
 
 
@@ -112,6 +113,14 @@ def _rotina_diaria() -> None:
             continue
 
         capturar_snapshot_diario(conta_id, dados, dia)
+
+        try:
+            pedidos = obter_adaptador(conta_id, canal).coletar_pedidos_do_dia(dia)
+            salvar_pedidos_do_dia(conta_id, pedidos, dia)
+        except NotImplementedError as erro:
+            print(f"[conta: {conta_id}] {erro}")
+        except Exception as erro:
+            print(f"[conta: {conta_id}] Falha ao coletar pedidos: {erro}")
 
         variacao = obter_variacao_anuncios(conta_id=conta_id)
         if variacao is None:

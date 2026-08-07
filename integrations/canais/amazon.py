@@ -19,3 +19,10 @@ class AmazonCanal:
             "Precisa cadastrar um app na Amazon Selling Partner API (credenciais LWA + AWS) "
             "antes de implementar este adaptador."
         )
+
+    def coletar_pedidos_do_dia(self, dia: date) -> list[dict]:
+        raise NotImplementedError(
+            "Integração com a Amazon (SP-API) ainda não foi implementada. "
+            "Precisa cadastrar um app na Amazon Selling Partner API (credenciais LWA + AWS) "
+            "antes de implementar este adaptador."
+        )
