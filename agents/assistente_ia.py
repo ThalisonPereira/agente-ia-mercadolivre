@@ -49,7 +49,11 @@ def _formatar_linhas(linhas: list[dict]) -> str:
 
 @beta_tool
 def consultar_sku(
-    sku_ou_titulo: str, data_inicio: str = "", data_fim: str = "", conta_id: str = ""
+    sku_ou_titulo: str,
+    data_inicio: str = "",
+    data_fim: str = "",
+    conta_id: str = "",
+    canal: str = "",
 ) -> str:
     """Busca o desempenho (visitas, vendas e receita somados) de um anúncio
     específico por SKU ou parte do título. Pode retornar mais de um anúncio
@@ -62,15 +66,18 @@ def consultar_sku(
         data_inicio: Data inicial do período (AAAA-MM-DD), opcional.
         data_fim: Data final do período (AAAA-MM-DD), opcional.
         conta_id: Restringe a busca a uma conta específica (ex: "hc"), opcional - se omitido, busca em todas as contas.
+        canal: Restringe a um canal inteiro (ex: "mercado_livre", "shopee", "amazon"), opcional.
     """
     resultado = buscar_por_sku_ou_titulo(
-        sku_ou_titulo, data_inicio or None, data_fim or None, conta_id or None
+        sku_ou_titulo, data_inicio or None, data_fim or None, conta_id or None, canal or None
     )
     return _formatar_linhas(resultado)
 
 
 @beta_tool
-def variacao_recente(data_inicial: str = "", data_final: str = "", conta_id: str = "") -> str:
+def variacao_recente(
+    data_inicial: str = "", data_final: str = "", conta_id: str = "", canal: str = ""
+) -> str:
     """Lista todos os anúncios com a variação percentual de visitas e vendas
     entre duas datas, classificados como Queda, Alta ou Estável. Se as datas
     não forem informadas, usa as duas datas mais recentes com dados no banco.
@@ -79,8 +86,11 @@ def variacao_recente(data_inicial: str = "", data_final: str = "", conta_id: str
         data_inicial: Data mais antiga da comparação (AAAA-MM-DD), opcional.
         data_final: Data mais recente da comparação (AAAA-MM-DD), opcional.
         conta_id: Restringe a comparação a uma conta específica (ex: "hc"), opcional - se omitido, combina todas as contas.
+        canal: Restringe a um canal inteiro (ex: "mercado_livre", "shopee", "amazon"), opcional.
     """
-    resultado = obter_variacao_anuncios(data_inicial or None, data_final or None, conta_id or None)
+    resultado = obter_variacao_anuncios(
+        data_inicial or None, data_final or None, conta_id or None, canal or None
+    )
     if resultado is None:
         return "Ainda não há snapshots suficientes para comparar (precisa de pelo menos 2 dias de histórico)."
     return _formatar_linhas(resultado)

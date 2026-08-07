@@ -29,6 +29,8 @@ JOIN historico_anuncios_diario h_antigo
 LEFT JOIN anuncios a
     ON a.conta_id = h_novo.conta_id
     AND a.item_id = h_novo.item_id
+LEFT JOIN contas c
+    ON c.conta_id = h_novo.conta_id
 WHERE h_novo.data_snapshot = :data_final
 """
 
@@ -51,14 +53,22 @@ def _classificar(variacao_visitas: float, variacao_vendas: float) -> str:
     return "Estável"
 
 
-def _obter_duas_datas_mais_recentes(conta_id: str | None = None) -> tuple[str, str] | None:
-    """Acha as duas datas de snapshot mais recentes já registradas (opcionalmente só de 1 conta)."""
-    sql = "SELECT DISTINCT data_snapshot FROM historico_anuncios_diario"
+def _obter_duas_datas_mais_recentes(
+    conta_id: str | None = None, canal: str | None = None
+) -> tuple[str, str] | None:
+    """Acha as duas datas de snapshot mais recentes já registradas (opcionalmente restrito a conta/canal)."""
+    sql = "SELECT DISTINCT h.data_snapshot FROM historico_anuncios_diario h LEFT JOIN contas c ON c.conta_id = h.conta_id"
     parametros = {}
+    filtros = []
     if conta_id:
-        sql += " WHERE conta_id = :conta_id"
+        filtros.append("h.conta_id = :conta_id")
         parametros["conta_id"] = conta_id
-    sql += " ORDER BY data_snapshot DESC LIMIT 2"
+    if canal:
+        filtros.append("c.canal = :canal")
+        parametros["canal"] = canal
+    if filtros:
+        sql += " WHERE " + " AND ".join(filtros)
+    sql += " ORDER BY h.data_snapshot DESC LIMIT 2"
 
     conexao = obter_conexao()
     try:
@@ -75,17 +85,20 @@ def _obter_duas_datas_mais_recentes(conta_id: str | None = None) -> tuple[str, s
 
 
 def obter_variacao_anuncios(
-    data_inicial: str | None = None, data_final: str | None = None, conta_id: str | None = None
+    data_inicial: str | None = None,
+    data_final: str | None = None,
+    conta_id: str | None = None,
+    canal: str | None = None,
 ) -> list[dict] | None:
     """
     Calcula a variação de visitas/vendas entre duas datas e retorna uma
     lista de dicionários (um por anúncio), já com 'status' calculado.
-    Restringe a uma conta específica se `conta_id` for informado; senão,
-    combina todas as contas. Retorna None se não houver snapshots
-    suficientes para comparar.
+    Restringe a uma conta específica (`conta_id`) ou a um canal inteiro
+    (`canal`) se informado; senão, combina todas as contas. Retorna None se
+    não houver snapshots suficientes para comparar.
     """
     if not data_inicial or not data_final:
-        datas = _obter_duas_datas_mais_recentes(conta_id)
+        datas = _obter_duas_datas_mais_recentes(conta_id, canal)
         if not datas:
             return None
         data_inicial, data_final = datas
@@ -95,6 +108,9 @@ def obter_variacao_anuncios(
     if conta_id:
         sql += " AND h_novo.conta_id = :conta_id"
         parametros["conta_id"] = conta_id
+    if canal:
+        sql += " AND c.canal = :canal"
+        parametros["canal"] = canal
 
     conexao = obter_conexao()
     try:

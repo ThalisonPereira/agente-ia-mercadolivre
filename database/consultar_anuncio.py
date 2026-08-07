@@ -17,6 +17,7 @@ def buscar_por_sku_ou_titulo(
     data_inicio: str | None = None,
     data_fim: str | None = None,
     conta_id: str | None = None,
+    canal: str | None = None,
 ) -> list[dict]:
     """
     Busca o desempenho (visitas/vendas/receita somados) de anúncios cujo SKU
@@ -24,12 +25,15 @@ def buscar_por_sku_ou_titulo(
     pode aparecer em qualquer ordem/posição - "bancada 120cm" casa com
     "Bancada Gourmet Ilha ... 120cm", não exige a frase inteira como
     substring contínua), num intervalo de datas. Restringe a uma conta
-    específica se `conta_id` for informado; senão, busca em todas as contas.
+    específica (`conta_id`) ou a um canal inteiro (`canal`) se informado;
+    senão, busca em todas as contas.
 
     Se data_inicio/data_fim não forem informados, usa os últimos 30 dias a
-    partir do dado mais recente disponível no banco. Pode casar mais de um
-    anúncio (ex: termo genérico, ou o mesmo produto em contas diferentes) -
-    retorna um item por (conta, anúncio) encontrado.
+    partir do dado mais recente disponível no banco - já respeitando o
+    filtro de conta_id/canal, pra não cair numa data em que essa conta
+    específica não tem histórico. Pode casar mais de um anúncio (ex: termo
+    genérico, ou o mesmo produto em contas diferentes) - retorna um item
+    por (conta, anúncio) encontrado.
     """
     palavras = termo.split()
     if not palavras:
@@ -40,7 +44,11 @@ def buscar_por_sku_ou_titulo(
     )
     parametros = {f"palavra{i}": f"%{palavra}%" for i, palavra in enumerate(palavras)}
 
-    filtro_conta = "AND h.conta_id = :conta_id" if conta_id else ""
+    filtros_extra = ""
+    if conta_id:
+        filtros_extra += " AND h.conta_id = :conta_id"
+    if canal:
+        filtros_extra += " AND c.canal = :canal"
 
     sql = f"""
         SELECT
@@ -55,10 +63,11 @@ def buscar_por_sku_ou_titulo(
             MAX(h.data_snapshot) AS data_fim
         FROM historico_anuncios_diario h
         JOIN anuncios a ON a.conta_id = h.conta_id AND a.item_id = h.item_id
+        LEFT JOIN contas c ON c.conta_id = h.conta_id
         WHERE {condicoes}
           AND h.data_snapshot >= :data_inicio
           AND h.data_snapshot <= :data_fim
-          {filtro_conta}
+          {filtros_extra}
         GROUP BY h.conta_id, a.item_id, a.titulo, a.sku
         ORDER BY total_receita DESC
     """
@@ -66,8 +75,22 @@ def buscar_por_sku_ou_titulo(
     conexao = obter_conexao()
     try:
         if not data_inicio or not data_fim:
+            filtros_data_maxima = ""
+            parametros_data_maxima = {}
+            if conta_id:
+                filtros_data_maxima += " AND h.conta_id = :conta_id"
+                parametros_data_maxima["conta_id"] = conta_id
+            if canal:
+                filtros_data_maxima += " AND c.canal = :canal"
+                parametros_data_maxima["canal"] = canal
             linha = conexao.execute(
-                "SELECT MAX(data_snapshot) AS maxima FROM historico_anuncios_diario"
+                f"""
+                SELECT MAX(h.data_snapshot) AS maxima
+                FROM historico_anuncios_diario h
+                LEFT JOIN contas c ON c.conta_id = h.conta_id
+                WHERE 1=1 {filtros_data_maxima}
+                """,
+                parametros_data_maxima,
             ).fetchone()
             if linha is None or linha["maxima"] is None:
                 return []
@@ -79,6 +102,8 @@ def buscar_por_sku_ou_titulo(
         parametros["data_fim"] = data_fim
         if conta_id:
             parametros["conta_id"] = conta_id
+        if canal:
+            parametros["canal"] = canal
         linhas = conexao.execute(sql, parametros).fetchall()
     finally:
         conexao.close()
