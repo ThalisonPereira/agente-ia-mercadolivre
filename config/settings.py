@@ -24,12 +24,15 @@ class ConfiguracaoInvalidaError(Exception):
 
 def _obter_variavel_obrigatoria(nome: str) -> str:
     valor = os.getenv(nome)
-    if not valor:
+    if not valor or not valor.strip():
         raise ConfiguracaoInvalidaError(
             f"A variável de ambiente '{nome}' não foi encontrada. "
             f"Verifique se o arquivo .env existe na raiz do projeto e contém essa chave."
         )
-    return valor
+    # .strip() remove espaços/quebras de linha acidentais (ex: secret do
+    # GitHub Actions colado com um "Enter" sobrando no final, que quebra
+    # bibliotecas HTTP como aiohttp - "Forbidden control character in headers").
+    return valor.strip()
 
 
 @dataclass(frozen=True)
@@ -55,8 +58,8 @@ def carregar_configuracao_ml(conta_id: str | None = None) -> MercadoLivreConfig:
     def obter(sufixo: str) -> str:
         if conta_id:
             valor = os.getenv(f"ML_{conta_id.upper()}_{sufixo}")
-            if valor:
-                return valor
+            if valor and valor.strip():
+                return valor.strip()
         return _obter_variavel_obrigatoria(f"ML_{sufixo}")
 
     return MercadoLivreConfig(
