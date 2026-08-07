@@ -23,13 +23,17 @@ from database.ranking import obter_ranking
 MODELO = "claude-sonnet-5"
 
 SYSTEM_PROMPT = """\
-Você é um assistente de e-commerce que ajuda um vendedor do Mercado Livre a \
-entender o desempenho dos seus anúncios (visitas, vendas, receita). Use as \
-ferramentas disponíveis para buscar exatamente o dado necessário para \
-responder cada pergunta - nunca invente números que não vieram de uma \
-ferramenta. Responda em português, de forma direta e objetiva, citando \
-números quando fizer sentido. Se não conseguir responder com os dados \
-disponíveis, diga isso claramente em vez de supor."""
+Você é um assistente de e-commerce que ajuda um vendedor a entender o \
+desempenho dos seus anúncios (visitas, vendas, receita) em um ou mais \
+canais de venda (Mercado Livre, Shopee, Amazon) e, dentro de cada canal, \
+em uma ou mais contas. Use as ferramentas disponíveis para buscar \
+exatamente o dado necessário para responder cada pergunta - nunca invente \
+números que não vieram de uma ferramenta. Se o usuário não especificar \
+conta ou canal, combine os dados de todas as contas disponíveis; se \
+especificar (ex: "na Shopee", "na conta X"), use os parâmetros conta_id/ \
+canal das ferramentas para filtrar. Responda em português, de forma direta \
+e objetiva, citando números quando fizer sentido. Se não conseguir \
+responder com os dados disponíveis, diga isso claramente em vez de supor."""
 
 
 def _formatar_linhas(linhas: list[dict]) -> str:
@@ -44,23 +48,29 @@ def _formatar_linhas(linhas: list[dict]) -> str:
 
 
 @beta_tool
-def consultar_sku(sku_ou_titulo: str, data_inicio: str = "", data_fim: str = "") -> str:
+def consultar_sku(
+    sku_ou_titulo: str, data_inicio: str = "", data_fim: str = "", conta_id: str = ""
+) -> str:
     """Busca o desempenho (visitas, vendas e receita somados) de um anúncio
     específico por SKU ou parte do título. Pode retornar mais de um anúncio
-    se o termo for genérico. Datas no formato AAAA-MM-DD; se omitidas, usa
-    os últimos 30 dias com dados disponíveis.
+    se o termo for genérico, ou se o mesmo produto existir em contas
+    diferentes. Datas no formato AAAA-MM-DD; se omitidas, usa os últimos 30
+    dias com dados disponíveis.
 
     Args:
         sku_ou_titulo: SKU exato ou parte do título do anúncio a buscar.
         data_inicio: Data inicial do período (AAAA-MM-DD), opcional.
         data_fim: Data final do período (AAAA-MM-DD), opcional.
+        conta_id: Restringe a busca a uma conta específica (ex: "hc"), opcional - se omitido, busca em todas as contas.
     """
-    resultado = buscar_por_sku_ou_titulo(sku_ou_titulo, data_inicio or None, data_fim or None)
+    resultado = buscar_por_sku_ou_titulo(
+        sku_ou_titulo, data_inicio or None, data_fim or None, conta_id or None
+    )
     return _formatar_linhas(resultado)
 
 
 @beta_tool
-def variacao_recente(data_inicial: str = "", data_final: str = "") -> str:
+def variacao_recente(data_inicial: str = "", data_final: str = "", conta_id: str = "") -> str:
     """Lista todos os anúncios com a variação percentual de visitas e vendas
     entre duas datas, classificados como Queda, Alta ou Estável. Se as datas
     não forem informadas, usa as duas datas mais recentes com dados no banco.
@@ -68,15 +78,23 @@ def variacao_recente(data_inicial: str = "", data_final: str = "") -> str:
     Args:
         data_inicial: Data mais antiga da comparação (AAAA-MM-DD), opcional.
         data_final: Data mais recente da comparação (AAAA-MM-DD), opcional.
+        conta_id: Restringe a comparação a uma conta específica (ex: "hc"), opcional - se omitido, combina todas as contas.
     """
-    resultado = obter_variacao_anuncios(data_inicial or None, data_final or None)
+    resultado = obter_variacao_anuncios(data_inicial or None, data_final or None, conta_id or None)
     if resultado is None:
         return "Ainda não há snapshots suficientes para comparar (precisa de pelo menos 2 dias de histórico)."
     return _formatar_linhas(resultado)
 
 
 @beta_tool
-def ranking_periodo(metrica: str, data_inicio: str, data_fim: str, top_n: int = 10) -> str:
+def ranking_periodo(
+    metrica: str,
+    data_inicio: str,
+    data_fim: str,
+    top_n: int = 10,
+    conta_id: str = "",
+    canal: str = "",
+) -> str:
     """Retorna o ranking (top N) de anúncios por receita, visitas ou vendas,
     somados num intervalo de datas.
 
@@ -85,22 +103,31 @@ def ranking_periodo(metrica: str, data_inicio: str, data_fim: str, top_n: int = 
         data_inicio: Data inicial do período (AAAA-MM-DD).
         data_fim: Data final do período (AAAA-MM-DD).
         top_n: Quantos anúncios retornar no ranking (padrão 10).
+        conta_id: Restringe a uma conta específica (ex: "hc"), opcional.
+        canal: Restringe a um canal inteiro (ex: "mercado_livre", "shopee", "amazon"), opcional - se omitido junto com conta_id, combina tudo.
     """
     try:
-        resultado = obter_ranking(metrica, data_inicio, data_fim, top_n)
+        resultado = obter_ranking(metrica, data_inicio, data_fim, top_n, conta_id or None, canal or None)
     except ValueError as erro:
         return str(erro)
     return _formatar_linhas(resultado)
 
 
 @beta_tool
-def ultima_analise() -> str:
+def ultima_analise(conta_id: str = "") -> str:
     """Retorna a análise narrativa mais recente já gerada sobre o
-    desempenho geral dos anúncios (a "análise do dia")."""
-    analise = obter_ultima_analise()
+    desempenho dos anúncios (a "análise do dia").
+
+    Args:
+        conta_id: Restringe a uma conta específica (ex: "hc"), opcional - se omitido, retorna a análise mais recente entre todas as contas.
+    """
+    analise = obter_ultima_analise(conta_id or None)
     if analise is None:
         return "Ainda não há nenhuma análise gerada."
-    return f"Análise de {analise['data']} (gerada em {analise['gerado_em']}):\n\n{analise['texto']}"
+    return (
+        f"Análise da conta '{analise['conta_id']}' em {analise['data']} "
+        f"(gerada em {analise['gerado_em']}):\n\n{analise['texto']}"
+    )
 
 
 FERRAMENTAS = [consultar_sku, variacao_recente, ranking_periodo, ultima_analise]

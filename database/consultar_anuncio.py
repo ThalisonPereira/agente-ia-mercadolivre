@@ -13,18 +13,23 @@ from database.conexao_turso import obter_conexao
 
 
 def buscar_por_sku_ou_titulo(
-    termo: str, data_inicio: str | None = None, data_fim: str | None = None
+    termo: str,
+    data_inicio: str | None = None,
+    data_fim: str | None = None,
+    conta_id: str | None = None,
 ) -> list[dict]:
     """
     Busca o desempenho (visitas/vendas/receita somados) de anúncios cujo SKU
     ou título contenha TODAS as palavras do termo informado (cada palavra
     pode aparecer em qualquer ordem/posição - "bancada 120cm" casa com
     "Bancada Gourmet Ilha ... 120cm", não exige a frase inteira como
-    substring contínua), num intervalo de datas.
+    substring contínua), num intervalo de datas. Restringe a uma conta
+    específica se `conta_id` for informado; senão, busca em todas as contas.
 
     Se data_inicio/data_fim não forem informados, usa os últimos 30 dias a
     partir do dado mais recente disponível no banco. Pode casar mais de um
-    anúncio (ex: termo genérico) - retorna um item por anúncio encontrado.
+    anúncio (ex: termo genérico, ou o mesmo produto em contas diferentes) -
+    retorna um item por (conta, anúncio) encontrado.
     """
     palavras = termo.split()
     if not palavras:
@@ -35,8 +40,11 @@ def buscar_por_sku_ou_titulo(
     )
     parametros = {f"palavra{i}": f"%{palavra}%" for i, palavra in enumerate(palavras)}
 
+    filtro_conta = "AND h.conta_id = :conta_id" if conta_id else ""
+
     sql = f"""
         SELECT
+            h.conta_id,
             a.item_id,
             a.titulo,
             a.sku,
@@ -46,11 +54,12 @@ def buscar_por_sku_ou_titulo(
             MIN(h.data_snapshot) AS data_inicio,
             MAX(h.data_snapshot) AS data_fim
         FROM historico_anuncios_diario h
-        JOIN anuncios a ON a.item_id = h.item_id
+        JOIN anuncios a ON a.conta_id = h.conta_id AND a.item_id = h.item_id
         WHERE {condicoes}
           AND h.data_snapshot >= :data_inicio
           AND h.data_snapshot <= :data_fim
-        GROUP BY a.item_id, a.titulo, a.sku
+          {filtro_conta}
+        GROUP BY h.conta_id, a.item_id, a.titulo, a.sku
         ORDER BY total_receita DESC
     """
 
@@ -68,12 +77,15 @@ def buscar_por_sku_ou_titulo(
 
         parametros["data_inicio"] = data_inicio
         parametros["data_fim"] = data_fim
+        if conta_id:
+            parametros["conta_id"] = conta_id
         linhas = conexao.execute(sql, parametros).fetchall()
     finally:
         conexao.close()
 
     return [
         {
+            "conta_id": linha["conta_id"],
             "item_id": linha["item_id"],
             "anuncio": linha["titulo"] or linha["item_id"],
             "sku": linha["sku"] or "",

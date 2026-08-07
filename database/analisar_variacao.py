@@ -3,13 +3,16 @@ database/analisar_variacao.py
 
 Compara dois snapshots diários (mais antigo vs. mais recente) de visitas e
 vendas por anúncio, calcula a variação percentual e classifica cada anúncio
-em 'Queda', 'Alta' ou 'Estável'.
+em 'Queda', 'Alta' ou 'Estável'. Pode ser restrito a uma conta específica,
+ou combinar todas as contas (o join sempre casa por conta_id + item_id, pra
+nunca misturar anúncios de contas/canais diferentes que tenham o mesmo id).
 """
 
 from database.conexao_turso import obter_conexao
 
 QUERY_COMPARACAO = """
 SELECT
+    h_novo.conta_id,
     h_novo.item_id,
     a.titulo,
     a.sku,
@@ -20,9 +23,12 @@ SELECT
     h_novo.receita AS receita
 FROM historico_anuncios_diario h_novo
 JOIN historico_anuncios_diario h_antigo
-    ON h_antigo.item_id = h_novo.item_id
+    ON h_antigo.conta_id = h_novo.conta_id
+    AND h_antigo.item_id = h_novo.item_id
     AND h_antigo.data_snapshot = :data_inicial
-LEFT JOIN anuncios a ON a.item_id = h_novo.item_id
+LEFT JOIN anuncios a
+    ON a.conta_id = h_novo.conta_id
+    AND a.item_id = h_novo.item_id
 WHERE h_novo.data_snapshot = :data_final
 """
 
@@ -45,14 +51,18 @@ def _classificar(variacao_visitas: float, variacao_vendas: float) -> str:
     return "Estável"
 
 
-def _obter_duas_datas_mais_recentes() -> tuple[str, str] | None:
-    """Acha as duas datas de snapshot mais recentes já registradas."""
+def _obter_duas_datas_mais_recentes(conta_id: str | None = None) -> tuple[str, str] | None:
+    """Acha as duas datas de snapshot mais recentes já registradas (opcionalmente só de 1 conta)."""
+    sql = "SELECT DISTINCT data_snapshot FROM historico_anuncios_diario"
+    parametros = {}
+    if conta_id:
+        sql += " WHERE conta_id = :conta_id"
+        parametros["conta_id"] = conta_id
+    sql += " ORDER BY data_snapshot DESC LIMIT 2"
+
     conexao = obter_conexao()
     try:
-        linhas = conexao.execute(
-            "SELECT DISTINCT data_snapshot FROM historico_anuncios_diario "
-            "ORDER BY data_snapshot DESC LIMIT 2"
-        ).fetchall()
+        linhas = conexao.execute(sql, parametros).fetchall()
     finally:
         conexao.close()
 
@@ -65,24 +75,30 @@ def _obter_duas_datas_mais_recentes() -> tuple[str, str] | None:
 
 
 def obter_variacao_anuncios(
-    data_inicial: str | None = None, data_final: str | None = None
+    data_inicial: str | None = None, data_final: str | None = None, conta_id: str | None = None
 ) -> list[dict] | None:
     """
     Calcula a variação de visitas/vendas entre duas datas e retorna uma
     lista de dicionários (um por anúncio), já com 'status' calculado.
-    Retorna None se não houver snapshots suficientes para comparar.
+    Restringe a uma conta específica se `conta_id` for informado; senão,
+    combina todas as contas. Retorna None se não houver snapshots
+    suficientes para comparar.
     """
     if not data_inicial or not data_final:
-        datas = _obter_duas_datas_mais_recentes()
+        datas = _obter_duas_datas_mais_recentes(conta_id)
         if not datas:
             return None
         data_inicial, data_final = datas
 
+    sql = QUERY_COMPARACAO
+    parametros = {"data_inicial": data_inicial, "data_final": data_final}
+    if conta_id:
+        sql += " AND h_novo.conta_id = :conta_id"
+        parametros["conta_id"] = conta_id
+
     conexao = obter_conexao()
     try:
-        linhas = conexao.execute(
-            QUERY_COMPARACAO, {"data_inicial": data_inicial, "data_final": data_final}
-        ).fetchall()
+        linhas = conexao.execute(sql, parametros).fetchall()
     finally:
         conexao.close()
 
@@ -93,6 +109,7 @@ def obter_variacao_anuncios(
 
         resultado.append({
             "data": data_final,
+            "conta_id": linha["conta_id"],
             "item_id": linha["item_id"],
             "anuncio": linha["titulo"] or linha["item_id"],
             "sku": linha["sku"] or "",

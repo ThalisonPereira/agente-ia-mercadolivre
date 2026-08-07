@@ -3,8 +3,8 @@ database/capturar_snapshot.py
 
 Registra o snapshot de hoje (visitas, vendas e receita por anúncio) no
 histórico diário, e mantém a tabela 'anuncios' com o título/SKU mais
-recente de cada item. Deve rodar uma vez por dia, depois de coletar os
-dados na API do Mercado Livre.
+recente de cada item. Deve rodar uma vez por dia, por conta, depois de
+coletar os dados na API do canal correspondente (Mercado Livre, Shopee...).
 """
 
 from datetime import date, datetime
@@ -13,9 +13,9 @@ from database.conexao_turso import obter_conexao
 from database.esquema import criar_tabelas
 
 UPSERT_ANUNCIO = """
-INSERT INTO anuncios (item_id, titulo, sku, atualizado_em)
-VALUES (:item_id, :titulo, :sku, :atualizado_em)
-ON CONFLICT(item_id) DO UPDATE SET
+INSERT INTO anuncios (conta_id, item_id, titulo, sku, atualizado_em)
+VALUES (:conta_id, :item_id, :titulo, :sku, :atualizado_em)
+ON CONFLICT(conta_id, item_id) DO UPDATE SET
     titulo = excluded.titulo,
     sku = excluded.sku,
     atualizado_em = excluded.atualizado_em;
@@ -23,10 +23,10 @@ ON CONFLICT(item_id) DO UPDATE SET
 
 UPSERT_SNAPSHOT = """
 INSERT INTO historico_anuncios_diario (
-    item_id, data_snapshot, visitas, vendas_quantidade, receita, capturado_em
+    conta_id, item_id, data_snapshot, visitas, vendas_quantidade, receita, capturado_em
 )
-VALUES (:item_id, :data_snapshot, :visitas, :vendas_quantidade, :receita, :capturado_em)
-ON CONFLICT(item_id, data_snapshot) DO UPDATE SET
+VALUES (:conta_id, :item_id, :data_snapshot, :visitas, :vendas_quantidade, :receita, :capturado_em)
+ON CONFLICT(conta_id, item_id, data_snapshot) DO UPDATE SET
     visitas = excluded.visitas,
     vendas_quantidade = excluded.vendas_quantidade,
     receita = excluded.receita,
@@ -34,11 +34,12 @@ ON CONFLICT(item_id, data_snapshot) DO UPDATE SET
 """
 
 
-def capturar_snapshot_diario(dados_anuncios: list[dict], dia: date | None = None) -> None:
+def capturar_snapshot_diario(conta_id: str, dados_anuncios: list[dict], dia: date | None = None) -> None:
     """
-    Grava o snapshot do dia informado (padrão: hoje) a partir de uma lista de
-    dicionários já coletados na API, cada um com as chaves:
-        item_id, titulo, sku, visitas, vendas_quantidade, receita
+    Grava o snapshot do dia informado (padrão: hoje) pra uma conta
+    específica, a partir de uma lista de dicionários já coletados na API,
+    cada um com as chaves: item_id, titulo, sku, visitas,
+    vendas_quantidade, receita.
 
     O parâmetro 'dia' existe para permitir backfill de dias passados (ver
     comando 'backfill' em main.py) - na rotina diária normal, é omitido e
@@ -57,12 +58,14 @@ def capturar_snapshot_diario(dados_anuncios: list[dict], dia: date | None = None
         instrucoes = []
         for item in dados_anuncios:
             instrucoes.append((UPSERT_ANUNCIO, {
+                "conta_id": conta_id,
                 "item_id": item["item_id"],
                 "titulo": item["titulo"],
                 "sku": item.get("sku", ""),
                 "atualizado_em": agora,
             }))
             instrucoes.append((UPSERT_SNAPSHOT, {
+                "conta_id": conta_id,
                 "item_id": item["item_id"],
                 "data_snapshot": data_snapshot,
                 "visitas": item["visitas"],
@@ -72,6 +75,6 @@ def capturar_snapshot_diario(dados_anuncios: list[dict], dia: date | None = None
             }))
         conexao.executar_em_lote(instrucoes)
         conexao.commit()
-        print(f"Snapshot de {data_snapshot} registrado para {len(dados_anuncios)} anúncio(s).")
+        print(f"[conta: {conta_id}] Snapshot de {data_snapshot} registrado para {len(dados_anuncios)} anúncio(s).")
     finally:
         conexao.close()

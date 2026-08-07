@@ -14,11 +14,14 @@ direto, com ferramentas que buscam só o pedaço de dado necessário.
 from database.conexao_turso import obter_conexao
 
 
-def obter_datas_existentes() -> set[str]:
-    """Retorna o conjunto de datas (YYYY-MM-DD) que já têm snapshot registrado."""
+def obter_datas_existentes(conta_id: str) -> set[str]:
+    """Retorna o conjunto de datas (YYYY-MM-DD) que já têm snapshot registrado pra essa conta."""
     conexao = obter_conexao()
     try:
-        linhas = conexao.execute("SELECT DISTINCT data_snapshot FROM historico_anuncios_diario").fetchall()
+        linhas = conexao.execute(
+            "SELECT DISTINCT data_snapshot FROM historico_anuncios_diario WHERE conta_id = :conta_id",
+            {"conta_id": conta_id},
+        ).fetchall()
     finally:
         conexao.close()
     return {linha["data_snapshot"] for linha in linhas}

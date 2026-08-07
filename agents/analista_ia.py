@@ -12,7 +12,7 @@ from pathlib import Path
 import anthropic
 
 from config.settings import carregar_configuracao_anthropic
-from database.analises_diarias import salvar_analise
+from database.analises_diarias import CONTA_GERAL, salvar_analise
 
 CAMINHO_PROMPT = Path(__file__).resolve().parent.parent / "prompts" / "analise_anuncios.md"
 PASTA_REPORTS = Path(__file__).resolve().parent.parent / "reports"
@@ -63,11 +63,11 @@ def salvar_relatorio(texto: str, data: str) -> Path:
     return caminho
 
 
-def analisar_e_salvar(linhas: list[dict], data: str | None = None) -> str:
-    """Gera a análise, salva em disco + banco e retorna o texto (para publicar no Sheets, por ex.)."""
+def analisar_e_salvar(linhas: list[dict], data: str | None = None, conta_id: str = CONTA_GERAL) -> str:
+    """Gera a análise, salva em disco + banco (pra uma conta, ou 'geral') e retorna o texto (para publicar no Sheets, por ex.)."""
     data = data or datetime.now().date().isoformat()
     texto = gerar_analise(linhas, data)
     caminho = salvar_relatorio(texto, data)
-    salvar_analise(data, texto)
+    salvar_analise(data, texto, conta_id=conta_id)
     print(f"Análise gerada e salva em {caminho} e no banco de dados.")
     return texto

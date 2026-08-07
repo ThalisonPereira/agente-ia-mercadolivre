@@ -41,12 +41,28 @@ class MercadoLivreConfig:
     redirect_uri: str
 
 
-def carregar_configuracao_ml() -> MercadoLivreConfig:
-    """Lê e valida as variáveis de ambiente do Mercado Livre, retornando um objeto imutável."""
+def carregar_configuracao_ml(conta_id: str | None = None) -> MercadoLivreConfig:
+    """
+    Lê e valida as variáveis de ambiente do Mercado Livre pra uma conta
+    específica, retornando um objeto imutável.
+
+    Convenção pra múltiplas contas: ML_{CONTA_ID}_CLIENT_ID/_CLIENT_SECRET/
+    _REDIRECT_URI (ex: ML_HC_CLIENT_ID pra conta_id="hc"). Se a variável
+    prefixada não existir, cai pra ML_CLIENT_ID/_CLIENT_SECRET/_REDIRECT_URI
+    sem prefixo - compatibilidade com a configuração de conta única já
+    existente, sem exigir renomear o .env imediatamente.
+    """
+    def obter(sufixo: str) -> str:
+        if conta_id:
+            valor = os.getenv(f"ML_{conta_id.upper()}_{sufixo}")
+            if valor:
+                return valor
+        return _obter_variavel_obrigatoria(f"ML_{sufixo}")
+
     return MercadoLivreConfig(
-        client_id=_obter_variavel_obrigatoria("ML_CLIENT_ID"),
-        client_secret=_obter_variavel_obrigatoria("ML_CLIENT_SECRET"),
-        redirect_uri=_obter_variavel_obrigatoria("ML_REDIRECT_URI"),
+        client_id=obter("CLIENT_ID"),
+        client_secret=obter("CLIENT_SECRET"),
+        redirect_uri=obter("REDIRECT_URI"),
     )
 
 
