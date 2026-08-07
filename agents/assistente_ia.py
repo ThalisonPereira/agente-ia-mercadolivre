@@ -196,8 +196,9 @@ def extrato_do_dia(conta_id: str = "", canal: str = "") -> str:
     return (
         f"Extrato de {data}: {resumo['total_itens']} item(ns) vendido(s), "
         f"R$ {resumo['total_vendido']:.2f} em vendas, R$ {resumo['total_comissao']:.2f} de comissão ML, "
-        f"R$ {resumo['total_frete']:.2f} de frete, R$ {resumo['total_imposto']:.2f} de imposto estimado, "
-        f"margem líquida de R$ {resumo['total_margem']:.2f}.{aviso_custo}"
+        f"R$ {resumo['total_frete']:.2f} de frete, valor líquido sem imposto de R$ {resumo['total_liquido_sem_imposto']:.2f}, "
+        f"R$ {resumo['total_imposto']:.2f} de imposto estimado, "
+        f"margem líquida (já descontando o custo do produto) de R$ {resumo['total_margem']:.2f}.{aviso_custo}"
     )
 
 

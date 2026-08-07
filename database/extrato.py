@@ -117,8 +117,9 @@ def _calcular_linha(linha) -> dict:
     frete_vendedor = linha["frete_vendedor"] or 0.0
     custo_produto = linha["preco_custo"] if linha["preco_custo"] else None
 
+    valor_liquido_sem_imposto = preco_venda - comissao_ml - frete_vendedor
     imposto = preco_venda * ALIQUOTA_IMPOSTO
-    valor_liquido = preco_venda - comissao_ml - frete_vendedor - imposto
+    valor_liquido = valor_liquido_sem_imposto - imposto
     margem = (valor_liquido - custo_produto) if custo_produto is not None else None
 
     return {
@@ -130,6 +131,7 @@ def _calcular_linha(linha) -> dict:
         "preco_venda": preco_venda,
         "comissao_ml": comissao_ml,
         "frete_vendedor": frete_vendedor,
+        "valor_liquido_sem_imposto": round(valor_liquido_sem_imposto, 2),
         "imposto": round(imposto, 2),
         "valor_liquido": round(valor_liquido, 2),
         "custo_produto": custo_produto,
@@ -169,6 +171,7 @@ def obter_resumo_extrato(data: str, conta_id: str | None = None, canal: str | No
         "total_vendido": 0.0,
         "total_comissao": 0.0,
         "total_frete": 0.0,
+        "total_liquido_sem_imposto": 0.0,
         "total_imposto": 0.0,
         "total_custo": 0.0,
         "total_margem": 0.0,
@@ -178,6 +181,7 @@ def obter_resumo_extrato(data: str, conta_id: str | None = None, canal: str | No
         resumo["total_vendido"] += item["preco_venda"]
         resumo["total_comissao"] += item["comissao_ml"]
         resumo["total_frete"] += item["frete_vendedor"]
+        resumo["total_liquido_sem_imposto"] += item["valor_liquido_sem_imposto"]
         resumo["total_imposto"] += item["imposto"]
         if item["custo_produto"] is None:
             resumo["itens_sem_custo"] += 1

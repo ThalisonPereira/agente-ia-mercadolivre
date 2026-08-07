@@ -3,10 +3,12 @@ paginas/7_extrato.py
 
 Extrato diário de margem por venda: pra cada item vendido (SKU) do dia
 mais recente coletado, mostra preço de venda, comissão do Mercado Livre,
-frete pago pelo vendedor, imposto (14%) e o custo do produto (Bling),
-chegando na margem líquida. Ver database/extrato.py pra fórmula e
-limitações (ex: SKUs sem custo cadastrado no Bling ficam sinalizados,
-não silenciosamente tratados como custo zero).
+frete pago pelo vendedor, valor líquido sem imposto, imposto (14%),
+valor líquido final e o custo do produto (Bling), chegando na margem
+líquida. Cada coluna tem uma dica (tooltip) explicando o que representa.
+Ver database/extrato.py pra fórmula e limitações (ex: SKUs sem custo
+cadastrado no Bling ficam sinalizados, não silenciosamente tratados como
+custo zero).
 """
 
 import pandas as pd
@@ -47,14 +49,22 @@ if itens:
     df["sku"] = df.apply(lambda linha: linha["sku"] if linha["custo_produto"] is not None else f"⚠️ {linha['sku'] or '(sem SKU)'}", axis=1)
     st.dataframe(
         df,
+        column_order=[
+            "sku", "titulo", "quantidade", "preco_venda", "comissao_ml", "frete_vendedor",
+            "valor_liquido_sem_imposto", "imposto", "valor_liquido", "custo_produto", "margem",
+        ],
         column_config={
-            "preco_venda": st.column_config.NumberColumn("Preço Venda", format="R$ %.2f"),
-            "comissao_ml": st.column_config.NumberColumn("Comissão ML", format="R$ %.2f"),
-            "frete_vendedor": st.column_config.NumberColumn("Frete", format="R$ %.2f"),
-            "imposto": st.column_config.NumberColumn("Imposto", format="R$ %.2f"),
-            "valor_liquido": st.column_config.NumberColumn("Valor Líquido", format="R$ %.2f"),
-            "custo_produto": st.column_config.NumberColumn("Custo", format="R$ %.2f"),
-            "margem": st.column_config.NumberColumn("Margem", format="R$ %.2f"),
+            "sku": st.column_config.TextColumn("SKU", help="Código do produto no momento da venda - ⚠️ significa que não foi encontrado (ou tinha custo zerado) no Bling."),
+            "titulo": st.column_config.TextColumn("Anúncio", help="Título do anúncio no Mercado Livre."),
+            "quantidade": st.column_config.NumberColumn("Qtd", help="Quantidade vendida nessa linha."),
+            "preco_venda": st.column_config.NumberColumn("Preço Venda", format="R$ %.2f", help="Valor bruto da venda (preço unitário × quantidade), antes de qualquer desconto."),
+            "comissao_ml": st.column_config.NumberColumn("Comissão ML", format="R$ %.2f", help="Comissão cobrada pelo Mercado Livre sobre essa venda."),
+            "frete_vendedor": st.column_config.NumberColumn("Frete", format="R$ %.2f", help="Custo do frete pago pelo vendedor (não o valor cobrado do comprador)."),
+            "valor_liquido_sem_imposto": st.column_config.NumberColumn("Valor Líquido (sem imposto)", format="R$ %.2f", help="Preço de venda menos comissão do ML e frete - ainda SEM descontar o imposto."),
+            "imposto": st.column_config.NumberColumn(f"Imposto ({ALIQUOTA_IMPOSTO:.0%})", format="R$ %.2f", help=f"Estimativa de imposto: {ALIQUOTA_IMPOSTO:.0%} sobre o preço de venda bruto."),
+            "valor_liquido": st.column_config.NumberColumn("Valor Líquido", format="R$ %.2f", help="Valor líquido (sem imposto) menos o imposto estimado - o que sobra da venda antes do custo do produto."),
+            "custo_produto": st.column_config.NumberColumn("Custo", format="R$ %.2f", help="Custo do produto cadastrado no Bling (campo precoCusto), pelo SKU."),
+            "margem": st.column_config.NumberColumn("Margem", format="R$ %.2f", help="Lucro real da venda: valor líquido menos o custo do produto."),
         },
         hide_index=True,
         use_container_width=True,
