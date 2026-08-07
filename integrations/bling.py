@@ -1,0 +1,180 @@
+"""
+integrations/bling.py
+
+Integração OAuth2 com o Bling (ERP) - fonte do custo de produto pra
+cálculo de margem (Fase B). Diferente de integrations/canais/, o Bling
+NÃO é um canal de venda - é uma credencial única, compartilhada por toda
+a operação (não por conta), por isso a classe abaixo não recebe
+conta_id, diferente de MercadoLivreCanal. O token é guardado na mesma
+tabela genérica database/tokens_oauth.py, sob a chave fixa CONTA_ID_BLING.
+
+Diferença importante em relação ao fluxo do Mercado Livre
+(integrations/canais/mercado_livre.py): a troca do authorization_code
+(e a renovação via refresh_token) usa HTTP Basic Auth com
+client_id:client_secret em base64 no header Authorization, em vez de
+mandar client_id/client_secret no corpo do POST.
+
+Este módulo é a "Parte 1" da integração (bootstrap OAuth + descoberta):
+a API v3 do Bling não tem uma referência pública fácil de raspar pra
+confirmar com 100% de certeza os nomes exatos de parâmetro/campo -
+testar_chamada_real() existe justamente pra ver o JSON de verdade de um
+produto (e confirmar o campo de custo) antes de escrever a Parte 2
+(tabela de custo + cálculo de margem). Ver o plano da Fase B.
+"""
+
+import base64
+import json
+import secrets
+import time
+from urllib.parse import urlencode
+
+import requests
+
+from config.settings import BlingConfig, carregar_configuracao_bling
+from database.tokens_oauth import obter_token, salvar_token
+
+AUTHORIZE_URL = "https://www.bling.com.br/Api/v3/oauth/authorize"
+TOKEN_URL = "https://www.bling.com.br/Api/v3/oauth/token"
+BASE_URL = "https://www.bling.com.br/Api/v3"
+
+# Chave fixa em tokens_oauth - o Bling não é uma "conta" de venda, é uma
+# credencial única compartilhada por toda a operação.
+CONTA_ID_BLING = "bling"
+
+MARGEM_SEGURANCA_SEGUNDOS = 60
+MAX_TENTATIVAS_RATE_LIMIT = 5
+
+
+class BlingClient:
+    """Cliente OAuth2 do Bling - credencial única, sem conta_id."""
+
+    def __init__(self):
+        self._config: BlingConfig = carregar_configuracao_bling()
+
+    # ------------------------------------------------------------------
+    # Fluxo de autorização OAuth2
+    # ------------------------------------------------------------------
+
+    def gerar_link_autorizacao(self) -> str:
+        """Gera a URL de autorização que deve ser aberta manualmente no navegador."""
+        state = secrets.token_urlsafe(16)
+        parametros = {
+            "response_type": "code",
+            "client_id": self._config.client_id,
+            "state": state,
+        }
+        url = f"{AUTHORIZE_URL}?{urlencode(parametros)}"
+
+        print("Abra esta URL no navegador, faça login no Bling e autorize o aplicativo:\n")
+        print(url)
+        print(
+            "\nApós autorizar, o navegador vai tentar carregar a redirect_uri "
+            "configurada no app do Bling e provavelmente mostrará erro de página "
+            "não encontrada - isso é esperado, pois não há servidor rodando ali. "
+            "Copie o valor do parâmetro 'code' que aparece na barra de endereço "
+            "(o código expira em poucos minutos, use-o logo em seguida)."
+        )
+        return url
+
+    def _cabecalho_basic(self) -> dict:
+        """
+        A troca de code/refresh_token por access_token no Bling usa HTTP
+        Basic Auth (client_id:client_secret em base64) no header
+        Authorization - diferente do Mercado Livre, que manda essas
+        credenciais no corpo do POST.
+        """
+        credencial = f"{self._config.client_id}:{self._config.client_secret}"
+        credencial_b64 = base64.b64encode(credencial.encode("ascii")).decode("ascii")
+        return {"Authorization": f"Basic {credencial_b64}", "Accept": "application/json"}
+
+    def trocar_code_por_token(self, authorization_code: str) -> dict:
+        """Troca o authorization_code (validade curta) pelos tokens de acesso reais."""
+        resposta = requests.post(
+            TOKEN_URL,
+            headers=self._cabecalho_basic(),
+            json={
+                "grant_type": "authorization_code",
+                "code": authorization_code,
+                "redirect_uri": self._config.redirect_uri,
+            },
+            timeout=15,
+        )
+
+        if resposta.status_code != 200:
+            print(f"Erro ao trocar o code por token (status {resposta.status_code}).")
+            print(f"Resposta: {resposta.text}")
+            print("Verifique se o code não expirou e tente gerar um novo link.")
+            return {}
+
+        tokens = resposta.json()
+        self._salvar_tokens(tokens)
+
+        print("Tokens obtidos e salvos com sucesso.")
+        print(f"Tipo do token: {tokens.get('token_type')}")
+        print(f"Expira em (segundos): {tokens.get('expires_in')}")
+        print(f"Escopos autorizados: {tokens.get('scope')}")
+        return tokens
+
+    def testar_chamada_real(self) -> None:
+        """Usa o access_token salvo (renovando automaticamente se necessário) pra listar produtos."""
+        headers = {"Authorization": f"Bearer {self._token_valido()}"}
+        resposta = requests.get(f"{BASE_URL}/produtos", headers=headers, timeout=15)
+
+        if resposta.status_code != 200:
+            print(f"Erro na chamada de teste (status {resposta.status_code}): {resposta.text}")
+            return
+
+        corpo = resposta.json()
+        produtos = corpo.get("data", corpo) if isinstance(corpo, dict) else corpo
+        print(f"Chamada realizada com sucesso. {len(produtos) if isinstance(produtos, list) else '?'} produto(s) retornado(s) nesta página.")
+
+        if isinstance(produtos, list) and produtos:
+            print("\nJSON bruto do primeiro produto (pra identificar o campo de custo):\n")
+            print(json.dumps(produtos[0], indent=2, ensure_ascii=False, default=str))
+        else:
+            print("\nResposta bruta completa:\n")
+            print(corpo)
+
+    # ------------------------------------------------------------------
+    # Gerenciamento de token (mesmo padrão de MercadoLivreCanal)
+    # ------------------------------------------------------------------
+
+    def _salvar_tokens(self, tokens: dict) -> None:
+        salvar_token(CONTA_ID_BLING, {**tokens, "obtido_em": time.time()})
+
+    def _token_expirado(self, tokens: dict) -> bool:
+        obtido_em = tokens.get("obtido_em", 0)
+        expires_in = tokens.get("expires_in", 0)
+        expira_em = obtido_em + expires_in
+        return time.time() >= (expira_em - MARGEM_SEGURANCA_SEGUNDOS)
+
+    def _renovar_tokens(self, refresh_token: str) -> dict:
+        resposta = requests.post(
+            TOKEN_URL,
+            headers=self._cabecalho_basic(),
+            json={"grant_type": "refresh_token", "refresh_token": refresh_token},
+            timeout=15,
+        )
+
+        if resposta.status_code != 200:
+            raise RuntimeError(f"Falha ao renovar o token do Bling (status {resposta.status_code}): {resposta.text}")
+
+        novos_tokens = resposta.json()
+        self._salvar_tokens(novos_tokens)
+        return novos_tokens
+
+    def _token_valido(self) -> str:
+        tokens = obter_token(CONTA_ID_BLING)
+
+        if not tokens:
+            raise RuntimeError(
+                "Nenhum token do Bling salvo. Rode 'python main.py bling_passo1' e "
+                "'python main.py bling_passo2 <code>' primeiro."
+            )
+
+        if self._token_expirado(tokens):
+            print("Access token do Bling expirado ou perto de expirar - renovando...")
+            tokens = self._renovar_tokens(tokens["refresh_token"])
+            print("Token renovado com sucesso.")
+
+        return tokens["access_token"]

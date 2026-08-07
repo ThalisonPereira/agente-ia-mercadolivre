@@ -106,6 +106,25 @@ def carregar_configuracao_anthropic() -> AnthropicConfig:
 
 
 @dataclass(frozen=True)
+class BlingConfig:
+    """Credenciais da integração OAuth2 com o Bling (ERP - fonte do custo de produto pra cálculo de margem)."""
+
+    client_id: str
+    client_secret: str
+    redirect_uri: str
+
+
+def carregar_configuracao_bling() -> BlingConfig:
+    """Lê e valida as variáveis de ambiente do Bling. Credencial única, compartilhada
+    por toda a operação (não é por conta de venda, diferente do Mercado Livre)."""
+    return BlingConfig(
+        client_id=_obter_variavel_obrigatoria("BLING_CLIENT_ID"),
+        client_secret=_obter_variavel_obrigatoria("BLING_CLIENT_SECRET"),
+        redirect_uri=_obter_variavel_obrigatoria("BLING_REDIRECT_URI"),
+    )
+
+
+@dataclass(frozen=True)
 class TursoConfig:
     """Credenciais do banco de dados hospedado (Turso/libSQL) - fonte de verdade
     dos dados, acessível tanto pela coleta local quanto pelo chat na nuvem."""

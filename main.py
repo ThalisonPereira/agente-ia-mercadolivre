@@ -11,6 +11,7 @@ from config.settings import (
     ConfiguracaoInvalidaError,
 )
 from integrations.canais import obter_adaptador
+from integrations.bling import BlingClient
 from integrations.google_sheets import (
     publicar_resultado_no_sheets,
     publicar_analise_no_sheets,
@@ -167,6 +168,16 @@ if __name__ == "__main__":
         else:
             obter_adaptador(sys.argv[2], "mercado_livre").testar_chamada_real()
 
+    elif comando == "bling_passo1":
+        BlingClient().gerar_link_autorizacao()
+    elif comando == "bling_passo2":
+        if len(sys.argv) < 3:
+            print("Uso: python main.py bling_passo2 SEU_AUTHORIZATION_CODE")
+        else:
+            BlingClient().trocar_code_por_token(sys.argv[2])
+    elif comando == "bling_passo3":
+        BlingClient().testar_chamada_real()
+
     elif comando == "testar_sheets":
         testar_conexao_sheets()
 
@@ -202,6 +213,7 @@ if __name__ == "__main__":
     else:
         print("Uso: python main.py [config|cadastrar_conta <id> <canal> <nome>|"
               "passo1 <conta_id>|passo2 <conta_id> <code>|passo3 <conta_id>|"
+              "bling_passo1|bling_passo2 <code>|bling_passo3|"
               "testar_sheets|coletar_snapshot <conta_id> <canal>|"
               "backfill <conta_id> <canal> <inicio> <fim>|"
               "analisar_variacao [conta_id]|rotina_diaria]")
