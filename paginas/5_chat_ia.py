@@ -19,8 +19,7 @@ página ser executada.
 import streamlit as st
 
 from agents.assistente_ia import responder_pergunta
-
-PERGUNTA_RESUMO_INICIAL = "Me dê um resumo objetivo da análise mais recente disponível."
+from database.analises_diarias import obter_ultima_analise
 
 
 def _obter_chave_anthropic() -> str:
@@ -31,22 +30,20 @@ st.title("🤖 Assistente IA")
 st.caption("Pergunte sobre visitas, vendas e receita dos seus anúncios")
 
 if "mensagens" not in st.session_state:
-    st.session_state.mensagens = []
     st.session_state.mensagens_api = []
 
     # Mostra a análise mais recente automaticamente ao abrir o chat, sem o
-    # usuário precisar perguntar nada primeiro.
-    with st.spinner("Carregando resumo do dia..."):
-        try:
-            texto, mensagens_api, _uso = responder_pergunta(
-                PERGUNTA_RESUMO_INICIAL, [], _obter_chave_anthropic()
-            )
-        except Exception as erro:
-            texto = f"Não consegui carregar o resumo automático: {erro}"
-            mensagens_api = []
+    # usuário precisar perguntar nada primeiro - lida direto do banco (mesma
+    # fonte da página Visão Geral), sem chamar a Anthropic: essa análise já
+    # foi gerada pela rotina diária, não precisa gastar uma chamada de IA só
+    # pra reformular um texto que já existe pronto.
+    analise = obter_ultima_analise()
+    if analise is None:
+        texto = "Ainda não há nenhuma análise gerada. Pode perguntar algo que eu busco os dados."
+    else:
+        texto = f"Análise mais recente (conta '{analise['conta_id']}' — {analise['data']}):\n\n{analise['texto']}"
 
-    st.session_state.mensagens.append({"role": "assistant", "content": texto})
-    st.session_state.mensagens_api = mensagens_api
+    st.session_state.mensagens = [{"role": "assistant", "content": texto}]
 
 for mensagem in st.session_state.mensagens:
     with st.chat_message(mensagem["role"]):

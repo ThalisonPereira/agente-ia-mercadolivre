@@ -172,6 +172,11 @@ def responder_pergunta(
         system=SYSTEM_PROMPT,
         tools=FERRAMENTAS,
         messages=historico,
+        # Cacheia o prompt de sistema + as definições das ferramentas (que
+        # não mudam entre as idas e vindas do tool-calling de uma pergunta,
+        # nem entre perguntas seguidas da mesma sessão) - evita recobrar o
+        # preço cheio desses tokens toda vez.
+        cache_control={"type": "ephemeral"},
     )
 
     ultima_mensagem = None
