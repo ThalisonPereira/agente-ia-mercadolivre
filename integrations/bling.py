@@ -91,11 +91,10 @@ class BlingClient:
         """Troca o authorization_code (validade curta) pelos tokens de acesso reais."""
         resposta = requests.post(
             TOKEN_URL,
-            headers=self._cabecalho_basic(),
-            json={
+            headers={**self._cabecalho_basic(), "Content-Type": "application/x-www-form-urlencoded"},
+            data={
                 "grant_type": "authorization_code",
                 "code": authorization_code,
-                "redirect_uri": self._config.redirect_uri,
             },
             timeout=15,
         )
@@ -103,7 +102,7 @@ class BlingClient:
         if resposta.status_code != 200:
             print(f"Erro ao trocar o code por token (status {resposta.status_code}).")
             print(f"Resposta: {resposta.text}")
-            print("Verifique se o code não expirou e tente gerar um novo link.")
+            print("Verifique se o code não expirou (validade de 1 minuto) e tente gerar um novo link.")
             return {}
 
         tokens = resposta.json()
@@ -118,22 +117,22 @@ class BlingClient:
     def testar_chamada_real(self) -> None:
         """Usa o access_token salvo (renovando automaticamente se necessário) pra listar produtos."""
         headers = {"Authorization": f"Bearer {self._token_valido()}"}
-        resposta = requests.get(f"{BASE_URL}/produtos", headers=headers, timeout=15)
+        resposta = requests.get(f"{BASE_URL}/produtos", headers=headers, params={"limite": 5}, timeout=15)
 
         if resposta.status_code != 200:
             print(f"Erro na chamada de teste (status {resposta.status_code}): {resposta.text}")
             return
 
         corpo = resposta.json()
-        produtos = corpo.get("data", corpo) if isinstance(corpo, dict) else corpo
-        print(f"Chamada realizada com sucesso. {len(produtos) if isinstance(produtos, list) else '?'} produto(s) retornado(s) nesta página.")
+        produtos = corpo.get("data", [])
+        print(f"Chamada realizada com sucesso. {len(produtos)} produto(s) retornado(s) nesta página.")
 
-        if isinstance(produtos, list) and produtos:
-            print("\nJSON bruto do primeiro produto (pra identificar o campo de custo):\n")
+        for produto in produtos:
+            print(f" - {produto.get('codigo', '(sem SKU)')} | {produto.get('nome')} | custo: {produto.get('precoCusto')}")
+
+        if produtos:
+            print("\nJSON bruto do primeiro produto:\n")
             print(json.dumps(produtos[0], indent=2, ensure_ascii=False, default=str))
-        else:
-            print("\nResposta bruta completa:\n")
-            print(corpo)
 
     # ------------------------------------------------------------------
     # Gerenciamento de token (mesmo padrão de MercadoLivreCanal)
@@ -151,8 +150,8 @@ class BlingClient:
     def _renovar_tokens(self, refresh_token: str) -> dict:
         resposta = requests.post(
             TOKEN_URL,
-            headers=self._cabecalho_basic(),
-            json={"grant_type": "refresh_token", "refresh_token": refresh_token},
+            headers={**self._cabecalho_basic(), "Content-Type": "application/x-www-form-urlencoded"},
+            data={"grant_type": "refresh_token", "refresh_token": refresh_token},
             timeout=15,
         )
 
