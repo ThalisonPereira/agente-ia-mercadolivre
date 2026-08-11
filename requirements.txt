@@ -22,3 +22,10 @@ streamlit>=1.38.0
 # HTTP/websocket puro Python, sem precisar compilar extensão nativa (o pacote
 # alternativo `libsql` requer toolchain Rust e não tem wheel pra todas as plataformas)
 libsql-client>=0.3.1
+
+# Dados de fuso horário (IANA) pro zoneinfo - usado em agents/assistente_ia.py
+# pra saber a hora certa em Brasília mesmo rodando em servidor com relógio em
+# UTC (GitHub Actions, Streamlit Cloud). Redundante em SOs que já têm a base
+# de fusos instalada (a maioria dos Linux), mas é a rede de segurança pra
+# ambientes que não têm (ex: algumas instalações do Windows).
+tzdata

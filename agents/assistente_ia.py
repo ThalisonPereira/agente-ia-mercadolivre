@@ -12,8 +12,13 @@ Não importa Streamlit - pode ser testado isolado (bloco __main__ abaixo,
 com a interface.
 """
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import anthropic
 from anthropic import beta_tool
+
+FUSO_BRASILIA = ZoneInfo("America/Sao_Paulo")
 
 from database.analisar_variacao import obter_variacao_anuncios
 from database.analises_diarias import obter_ultima_analise
@@ -26,7 +31,7 @@ from database.ranking import obter_ranking
 
 MODELO = "claude-sonnet-5"
 
-SYSTEM_PROMPT = """\
+SYSTEM_PROMPT_BASE = """\
 Você é um assistente de e-commerce que ajuda um vendedor a entender o \
 desempenho dos seus anúncios (visitas, vendas, receita) em um ou mais \
 canais de venda (Mercado Livre, Shopee, Amazon) e, dentro de cada canal, \
@@ -38,6 +43,38 @@ especificar (ex: "na Shopee", "na conta X"), use os parâmetros conta_id/ \
 canal das ferramentas para filtrar. Responda em português, de forma direta \
 e objetiva, citando números quando fizer sentido. Se não conseguir \
 responder com os dados disponíveis, diga isso claramente em vez de supor."""
+
+_DIAS_DA_SEMANA = [
+    "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira",
+    "sexta-feira", "sábado", "domingo",
+]
+
+
+def _montar_system_prompt() -> str:
+    """
+    Monta o prompt de sistema com a data/hora atual embutida, pra que o
+    modelo resolva sozinho expressões relativas ("ontem", "hoje", "essa
+    semana") sem precisar perguntar de volta ao usuário o que cada uma
+    significa. Recalculado a cada pergunta (não é uma constante fixa) -
+    isso reduz um pouco o aproveitamento do cache do prompt (ver
+    cache_control em responder_pergunta) só quando o dia muda, o que é
+    uma perda pequena perto do ganho de não confundir o modelo com a data.
+    """
+    # Servidores na nuvem (GitHub Actions, Streamlit Cloud) rodam em UTC, não
+    # em horário de Brasília - por isso converte explicitamente pro fuso
+    # certo, em vez de usar datetime.now() puro (que dependeria do fuso do
+    # sistema operacional onde o processo está rodando).
+    agora = datetime.now(FUSO_BRASILIA)
+    dia_semana = _DIAS_DA_SEMANA[agora.weekday()]
+    return (
+        f"{SYSTEM_PROMPT_BASE}\n\n"
+        f"Data e hora atual: {agora.strftime('%d/%m/%Y')} ({dia_semana}), {agora.strftime('%H:%M')} "
+        f"(horário de Brasília). Use essa referência pra resolver expressões relativas de tempo na "
+        f"pergunta do usuário (\"ontem\", \"hoje\", \"essa semana\", \"último mês\" etc.) sem precisar "
+        f"perguntar de volta o que a expressão significa - calcule a data exata você mesmo. Lembre que "
+        f"os dados coletados costumam ir só até ontem (a coleta roda 1x por dia); se o usuário perguntar "
+        f"sobre \"hoje\", explique que o dado mais recente disponível é de ontem."
+    )
 
 
 def _formatar_linhas(linhas: list[dict]) -> str:
@@ -236,7 +273,7 @@ def responder_pergunta(
     runner = client.beta.messages.tool_runner(
         model=MODELO,
         max_tokens=4096,
-        system=SYSTEM_PROMPT,
+        system=_montar_system_prompt(),
         tools=FERRAMENTAS,
         messages=historico,
         # Cacheia o prompt de sistema + as definições das ferramentas (que
