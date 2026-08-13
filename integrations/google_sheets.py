@@ -42,13 +42,15 @@ def _obter_ou_criar_aba(planilha, titulo: str, linhas: int = 1000, colunas: int 
         return planilha.add_worksheet(title=titulo, rows=linhas, cols=colunas)
 
 
-def publicar_resultado_no_sheets(linhas: list[dict]) -> None:
+def publicar_resultado_no_sheets(linhas: list[dict], conta_id: str) -> None:
     """
-    Sobrescreve a aba de dados com o cabeçalho e as linhas mais recentes
-    (uma linha por anúncio monitorado no dia).
+    Sobrescreve a aba de dados dessa conta com o cabeçalho e as linhas
+    mais recentes (uma linha por anúncio monitorado no dia). Cada conta
+    tem sua própria aba ("Dados - <conta_id>") - com 2+ contas ativas,
+    cada uma publica na sua, sem sobrescrever a das outras.
     """
     planilha = _obter_planilha()
-    aba = _obter_ou_criar_aba(planilha, ABA_DADOS)
+    aba = _obter_ou_criar_aba(planilha, f"{ABA_DADOS} - {conta_id}")
 
     aba.clear()
 
@@ -67,17 +69,17 @@ def publicar_resultado_no_sheets(linhas: list[dict]) -> None:
         ])
 
     aba.update(values=valores, range_name="A1")
-    print(f"{len(linhas)} linha(s) publicada(s) na aba '{ABA_DADOS}'.")
+    print(f"{len(linhas)} linha(s) publicada(s) na aba '{aba.title}'.")
 
 
-def publicar_analise_no_sheets(texto_analise: str, data: str) -> None:
-    """Escreve o resumo em linguagem natural gerado pela IA na aba de análise."""
+def publicar_analise_no_sheets(texto_analise: str, data: str, conta_id: str) -> None:
+    """Escreve o resumo em linguagem natural gerado pela IA na aba de análise dessa conta."""
     planilha = _obter_planilha()
-    aba = _obter_ou_criar_aba(planilha, ABA_ANALISE)
+    aba = _obter_ou_criar_aba(planilha, f"{ABA_ANALISE} - {conta_id}")
 
     aba.clear()
     aba.update(values=[[f"Análise de {data}"], [texto_analise]], range_name="A1")
-    print(f"Análise publicada na aba '{ABA_ANALISE}'.")
+    print(f"Análise publicada na aba '{aba.title}'.")
 
 
 def testar_conexao_sheets() -> None:

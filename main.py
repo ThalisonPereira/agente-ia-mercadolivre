@@ -146,15 +146,14 @@ def _rotina_diaria() -> None:
             print(f"[conta: {conta_id}] Ainda não há snapshots suficientes para comparar (precisa de pelo menos 2 dias de histórico).")
             continue
 
-        # A aba do Sheets ainda é única (não por conta) - com só 1 conta
-        # ativa isso não é problema; quando existir uma 2ª conta de verdade,
-        # essa publicação passa a sobrescrever a anterior (limitação
-        # conhecida, o Sheets é uma visão secundária, não a fonte principal).
-        publicar_resultado_no_sheets(variacao)
+        # Cada conta publica na sua própria aba ("Dados - <conta_id>",
+        # "Análise IA - <conta_id>") - várias contas ativas não sobrescrevem
+        # a publicação umas das outras.
+        publicar_resultado_no_sheets(variacao, conta_id)
 
         data_str = dia.isoformat()
         texto_analise = analisar_e_salvar(variacao, data_str, conta_id=conta_id)
-        publicar_analise_no_sheets(texto_analise, data_str)
+        publicar_analise_no_sheets(texto_analise, data_str, conta_id)
 
 
 if __name__ == "__main__":
@@ -185,6 +184,12 @@ if __name__ == "__main__":
             print("Uso: python main.py passo3 <conta_id>")
         else:
             obter_adaptador(sys.argv[2], "mercado_livre").testar_chamada_real()
+
+    elif comando == "ads_diagnostico":
+        if len(sys.argv) < 3:
+            print("Uso: python main.py ads_diagnostico <conta_id>")
+        else:
+            obter_adaptador(sys.argv[2], "mercado_livre").testar_chamada_advertising()
 
     elif comando == "bling_passo1":
         BlingClient().gerar_link_autorizacao()
@@ -231,6 +236,7 @@ if __name__ == "__main__":
     else:
         print("Uso: python main.py [config|cadastrar_conta <id> <canal> <nome>|"
               "passo1 <conta_id>|passo2 <conta_id> <code>|passo3 <conta_id>|"
+              "ads_diagnostico <conta_id>|"
               "bling_passo1|bling_passo2 <code>|bling_passo3|"
               "testar_sheets|coletar_snapshot <conta_id> <canal>|"
               "backfill <conta_id> <canal> <inicio> <fim>|"
