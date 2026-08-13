@@ -37,6 +37,7 @@ VALUES (
 ON CONFLICT(conta_id, pedido_id, item_id) DO UPDATE SET
     sku = excluded.sku,
     titulo = excluded.titulo,
+    data_venda = excluded.data_venda,
     quantidade = excluded.quantidade,
     preco_venda = excluded.preco_venda,
     comissao_ml = excluded.comissao_ml,

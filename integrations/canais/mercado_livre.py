@@ -39,6 +39,14 @@ MAX_TENTATIVAS_RATE_LIMIT = 5
 # expiração.
 MARGEM_SEGURANCA_SEGUNDOS = 60
 
+# Fuso usado pelo Mercado Livre no campo date_created dos pedidos desse site
+# (MLB) - confirmado empiricamente (7 pedidos reais checados, todos com
+# offset "-04:00", inclusive fora do horário de verão). Usar "-00:00" (UTC)
+# aqui causava um bug real: pedidos das 21h-23h59 (nesse fuso) do dia D
+# apareciam na janela de coleta do dia D+1, porque a diferença de 4h
+# empurrava o timestamp UTC pro dia seguinte.
+FUSO_DATE_CREATED_PEDIDOS = "-04:00"
+
 
 def _em_lotes(itens: list, tamanho: int = TAMANHO_LOTE):
     for i in range(0, len(itens), tamanho):
@@ -339,8 +347,8 @@ class MercadoLivreCanal:
 
         visitas_data_de = dia.isoformat()
         visitas_data_ate = (dia + timedelta(days=1)).isoformat()
-        pedidos_data_de = f"{dia.isoformat()}T00:00:00.000-00:00"
-        pedidos_data_ate = f"{dia.isoformat()}T23:59:59.000-00:00"
+        pedidos_data_de = f"{dia.isoformat()}T00:00:00.000{FUSO_DATE_CREATED_PEDIDOS}"
+        pedidos_data_ate = f"{dia.isoformat()}T23:59:59.000{FUSO_DATE_CREATED_PEDIDOS}"
 
         visitas_por_item = self._obter_visitas_itens(item_ids, visitas_data_de, visitas_data_ate)
         pedidos = self._obter_pedidos_periodo(seller_id, pedidos_data_de, pedidos_data_ate)
@@ -380,8 +388,8 @@ class MercadoLivreCanal:
         """
         seller_id = self.obter_id_vendedor()
 
-        pedidos_data_de = f"{dia.isoformat()}T00:00:00.000-00:00"
-        pedidos_data_ate = f"{dia.isoformat()}T23:59:59.000-00:00"
+        pedidos_data_de = f"{dia.isoformat()}T00:00:00.000{FUSO_DATE_CREATED_PEDIDOS}"
+        pedidos_data_ate = f"{dia.isoformat()}T23:59:59.000{FUSO_DATE_CREATED_PEDIDOS}"
         pedidos = self._obter_pedidos_periodo(seller_id, pedidos_data_de, pedidos_data_ate)
 
         resultado = []
@@ -414,8 +422,8 @@ class MercadoLivreCanal:
         """
         seller_id = self.obter_id_vendedor()
 
-        pedidos_data_de = f"{dia.isoformat()}T00:00:00.000-00:00"
-        pedidos_data_ate = f"{dia.isoformat()}T23:59:59.000-00:00"
+        pedidos_data_de = f"{dia.isoformat()}T00:00:00.000{FUSO_DATE_CREATED_PEDIDOS}"
+        pedidos_data_ate = f"{dia.isoformat()}T23:59:59.000{FUSO_DATE_CREATED_PEDIDOS}"
         pedidos = self._obter_pedidos_periodo(seller_id, pedidos_data_de, pedidos_data_ate)
 
         resultado = []

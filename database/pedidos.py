@@ -26,6 +26,7 @@ INSERT INTO pedidos (
 )
 VALUES (:conta_id, :pedido_id, :data_pedido, :status_envio, :substatus_envio, :logistic_type, :valor_total, :capturado_em)
 ON CONFLICT(conta_id, pedido_id) DO UPDATE SET
+    data_pedido = excluded.data_pedido,
     status_envio = excluded.status_envio,
     substatus_envio = excluded.substatus_envio,
     logistic_type = excluded.logistic_type,
