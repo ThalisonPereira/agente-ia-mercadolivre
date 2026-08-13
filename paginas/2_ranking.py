@@ -41,11 +41,24 @@ if not resultado:
     st.info("Sem dados no período selecionado.")
 else:
     df_ranking = pd.DataFrame(resultado)
-    df_ranking["anuncio_curto"] = df_ranking["anuncio"].str.slice(0, 40)
-    st.bar_chart(df_ranking.set_index("anuncio_curto")[[metrica]], horizontal=True)
+
+    def _rotulo(linha: pd.Series) -> str:
+        # SKU é o identificador mais curto, mas fica vazio pra anúncios com
+        # variação (o SKU real é por variação, não pelo item "pai" - ver
+        # database/consultar_anuncio.py). Nesse caso cai pro item_id sem o
+        # prefixo "MLB", que é o mesmo "#3756725723" mostrado na tela de
+        # anúncios do próprio Mercado Livre - sempre preenchido.
+        identificador = linha["sku"] or linha["item_id"].replace("MLB", "#")
+        return f"{identificador} - {linha['anuncio'][:30]}"
+
+    df_ranking["rotulo"] = df_ranking.apply(_rotulo, axis=1)
+    st.bar_chart(df_ranking.set_index("rotulo")[[metrica]], horizontal=True)
     st.dataframe(
         resultado,
+        column_order=["sku", "anuncio", "visitas", "vendas", "receita", "conta_id", "item_id"],
         column_config={
+            "sku": st.column_config.TextColumn("SKU"),
+            "anuncio": st.column_config.TextColumn("Anúncio"),
             "receita": st.column_config.NumberColumn("Receita", format="R$ %.2f"),
         },
         hide_index=True,
