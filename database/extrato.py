@@ -28,11 +28,11 @@ ALIQUOTA_IMPOSTO = 0.14
 UPSERT_ITEM_VENDA = """
 INSERT INTO itens_venda (
     conta_id, pedido_id, item_id, sku, titulo, data_venda,
-    quantidade, preco_venda, comissao_ml, frete_vendedor, capturado_em
+    quantidade, preco_venda, comissao_ml, frete_vendedor, status, capturado_em
 )
 VALUES (
     :conta_id, :pedido_id, :item_id, :sku, :titulo, :data_venda,
-    :quantidade, :preco_venda, :comissao_ml, :frete_vendedor, :capturado_em
+    :quantidade, :preco_venda, :comissao_ml, :frete_vendedor, :status, :capturado_em
 )
 ON CONFLICT(conta_id, pedido_id, item_id) DO UPDATE SET
     sku = excluded.sku,
@@ -42,6 +42,7 @@ ON CONFLICT(conta_id, pedido_id, item_id) DO UPDATE SET
     preco_venda = excluded.preco_venda,
     comissao_ml = excluded.comissao_ml,
     frete_vendedor = excluded.frete_vendedor,
+    status = excluded.status,
     capturado_em = excluded.capturado_em;
 """
 
@@ -84,6 +85,7 @@ def salvar_itens_venda_do_dia(conta_id: str, itens: list[dict], dia: date | None
                 "preco_venda": item.get("preco_venda", 0.0),
                 "comissao_ml": item.get("comissao_ml", 0.0),
                 "frete_vendedor": item.get("frete_vendedor", 0.0),
+                "status": item.get("status", "pago"),
                 "capturado_em": agora,
             })
             for item in itens
@@ -113,6 +115,31 @@ def obter_data_mais_recente(conta_id: str | None = None, canal: str | None = Non
 
 
 def _calcular_linha(linha) -> dict:
+    status = linha["status"] or "pago"
+
+    # Pedido cancelado: aparece no extrato (pra não sumir silenciosamente -
+    # o vendedor via essa venda na tela do Mercado Livre), mas todo valor
+    # em R$ fica zerado - não houve receita de verdade, então não deve
+    # entrar em nenhum total (venda, comissão, frete, margem).
+    if status == "cancelado":
+        return {
+            "conta_id": linha["conta_id"],
+            "pedido_id": linha["pedido_id"],
+            "sku": linha["sku"],
+            "titulo": linha["titulo"],
+            "quantidade": linha["quantidade"],
+            "status": status,
+            "preco_venda": 0.0,
+            "comissao_ml": 0.0,
+            "frete_vendedor": 0.0,
+            "valor_liquido_sem_imposto": 0.0,
+            "imposto": 0.0,
+            "valor_liquido": 0.0,
+            "custo_produto": None,
+            "margem": None,
+            "margem_percentual": None,
+        }
+
     preco_venda = linha["preco_venda"] or 0.0
     comissao_ml = linha["comissao_ml"] or 0.0
     frete_vendedor = linha["frete_vendedor"] or 0.0
@@ -131,6 +158,7 @@ def _calcular_linha(linha) -> dict:
         "sku": linha["sku"],
         "titulo": linha["titulo"],
         "quantidade": linha["quantidade"],
+        "status": status,
         "preco_venda": preco_venda,
         "comissao_ml": comissao_ml,
         "frete_vendedor": frete_vendedor,
@@ -149,7 +177,7 @@ def obter_extrato(data: str, conta_id: str | None = None, canal: str | None = No
     parametros["data"] = data
     sql = f"""
         SELECT v.conta_id, v.pedido_id, v.sku, v.titulo, v.quantidade,
-               v.preco_venda, v.comissao_ml, v.frete_vendedor,
+               v.preco_venda, v.comissao_ml, v.frete_vendedor, v.status,
                cp.preco_custo
         FROM itens_venda v
         LEFT JOIN contas c ON c.conta_id = v.conta_id
@@ -181,9 +209,13 @@ def obter_resumo_extrato(data: str, conta_id: str | None = None, canal: str | No
         "total_margem": 0.0,
         "margem_percentual": None,
         "itens_sem_custo": 0,
+        "itens_cancelados": 0,
     }
     vendido_com_custo_conhecido = 0.0
     for item in itens:
+        if item["status"] == "cancelado":
+            resumo["itens_cancelados"] += 1
+            continue
         resumo["total_vendido"] += item["preco_venda"]
         resumo["total_comissao"] += item["comissao_ml"]
         resumo["total_frete"] += item["frete_vendedor"]

@@ -272,7 +272,9 @@ class MercadoLivreCanal:
             time.sleep(PAUSA_ENTRE_VISITAS_SEGUNDOS)
         return visitas
 
-    def _obter_pedidos_periodo(self, seller_id: str, data_de: str, data_ate: str) -> list[dict]:
+    def _obter_pedidos_periodo(
+        self, seller_id: str, data_de: str, data_ate: str, status: str = "paid"
+    ) -> list[dict]:
         """data_de/data_ate no formato 'YYYY-MM-DDTHH:MM:SS.000-00:00' (ISO 8601)."""
         pedidos: list[dict] = []
         offset = 0
@@ -283,7 +285,7 @@ class MercadoLivreCanal:
                 f"{BASE_URL}/orders/search",
                 params={
                     "seller": seller_id,
-                    "order.status": "paid",
+                    "order.status": status,
                     "order.date_created.from": data_de,
                     "order.date_created.to": data_ate,
                     "limit": limite,
@@ -406,19 +408,26 @@ class MercadoLivreCanal:
 
     def coletar_extrato_do_dia(self, dia: date) -> list[dict]:
         """
-        Busca os pedidos pagos de um dia calendário completo e monta uma
-        linha por item vendido (SKU), com os valores brutos necessários
-        pro cálculo de margem em database/extrato.py: preço de venda,
-        comissão do Mercado Livre e frete pago pelo vendedor.
+        Busca os pedidos de um dia calendário completo e monta uma linha
+        por item vendido (SKU), com os valores brutos necessários pro
+        cálculo de margem em database/extrato.py: preço de venda, comissão
+        do Mercado Livre e frete pago pelo vendedor.
+
+        Também busca os pedidos CANCELADOS do mesmo dia e inclui uma linha
+        pra cada um, com todos os valores zerados e status="cancelado" -
+        aparecem no extrato pra não sumir silenciosamente (o vendedor via
+        essa venda na tela "Anúncios" do próprio Mercado Livre, que conta
+        "vendas brutas" mesmo de pedidos depois cancelados), mas não
+        contam na margem (não houve receita de verdade).
 
         'sale_fee' é tratado aqui como valor POR UNIDADE (mesma convenção
         de 'unit_price') - ainda sem um pedido real com quantity > 1 pra
         confirmar isso com certeza; se aparecer um caso assim e a conta
         não bater, é o primeiro lugar a revisar.
 
-        Quando um pedido tem mais de 1 item share do mesmo envio, o custo
-        de frete do pedido é rateado proporcionalmente ao valor de venda
-        de cada item.
+        Quando um pedido pago tem mais de 1 item compartilhando o mesmo
+        envio, o custo de frete do pedido é rateado proporcionalmente ao
+        valor de venda de cada item.
         """
         seller_id = self.obter_id_vendedor()
 
@@ -450,6 +459,22 @@ class MercadoLivreCanal:
                     "preco_venda": preco_item,
                     "comissao_ml": item.get("sale_fee", 0.0) * quantidade,
                     "frete_vendedor": frete_alocado,
+                    "status": "pago",
+                })
+
+        pedidos_cancelados = self._obter_pedidos_periodo(seller_id, pedidos_data_de, pedidos_data_ate, status="cancelled")
+        for pedido in pedidos_cancelados:
+            for item in pedido.get("order_items", []):
+                resultado.append({
+                    "pedido_id": str(pedido["id"]),
+                    "item_id": str(item.get("item", {}).get("id")),
+                    "sku": item.get("item", {}).get("seller_sku") or "",
+                    "titulo": item.get("item", {}).get("title", ""),
+                    "quantidade": item.get("quantity", 0),
+                    "preco_venda": 0.0,
+                    "comissao_ml": 0.0,
+                    "frete_vendedor": 0.0,
+                    "status": "cancelado",
                 })
 
         return resultado

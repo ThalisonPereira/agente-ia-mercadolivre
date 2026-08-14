@@ -46,18 +46,29 @@ if resumo["itens_sem_custo"]:
         "Bling (SKU não cadastrado, ou custo zerado - comum em produtos 'pai'/kit) - a margem total "
         "acima NÃO inclui esses itens, pra não distorcer o número."
     )
+if resumo["itens_cancelados"]:
+    st.info(
+        f"🚫 {resumo['itens_cancelados']} pedido(s) cancelado(s) nesse dia aparecem na tabela abaixo com "
+        "valores zerados - a venda não se concretizou, então não entram em nenhum total acima."
+    )
 
 itens = obter_extrato(data_maxima, conta_id, canal)
 if itens:
     df = pd.DataFrame(itens)
-    df["sku"] = df.apply(lambda linha: linha["sku"] if linha["custo_produto"] is not None else f"⚠️ {linha['sku'] or '(sem SKU)'}", axis=1)
+    df["sku"] = df.apply(
+        lambda linha: linha["sku"] if linha["status"] == "cancelado" or linha["custo_produto"] is not None
+        else f"⚠️ {linha['sku'] or '(sem SKU)'}",
+        axis=1,
+    )
+    df["status"] = df["status"].map({"pago": "✅ Pago", "cancelado": "🚫 Cancelado"}).fillna(df["status"])
     st.dataframe(
         df,
         column_order=[
-            "sku", "titulo", "quantidade", "preco_venda", "comissao_ml", "frete_vendedor",
+            "status", "sku", "titulo", "quantidade", "preco_venda", "comissao_ml", "frete_vendedor",
             "valor_liquido_sem_imposto", "imposto", "valor_liquido", "custo_produto", "margem", "margem_percentual",
         ],
         column_config={
+            "status": st.column_config.TextColumn("Status", help="'Pago' = venda confirmada, entra nos totais. 'Cancelado' = pedido cancelado, valores zerados, não entra nos totais."),
             "sku": st.column_config.TextColumn("SKU", help="Código do produto no momento da venda - ⚠️ significa que não foi encontrado (ou tinha custo zerado) no Bling."),
             "titulo": st.column_config.TextColumn("Anúncio", help="Título do anúncio no Mercado Livre."),
             "quantidade": st.column_config.NumberColumn("Qtd", help="Quantidade vendida nessa linha."),

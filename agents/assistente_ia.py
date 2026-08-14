@@ -231,6 +231,11 @@ def extrato_do_dia(conta_id: str = "", canal: str = "") -> str:
         if resumo["itens_sem_custo"]
         else ""
     )
+    aviso_cancelados = (
+        f" {resumo['itens_cancelados']} pedido(s) cancelado(s) nesse dia (não contam em nenhum total)."
+        if resumo["itens_cancelados"]
+        else ""
+    )
     margem_pct = f"{resumo['margem_percentual']:.1f}%" if resumo["margem_percentual"] is not None else "indisponível"
     return (
         f"Extrato de {data}: {resumo['total_itens']} item(ns) vendido(s), "
@@ -238,7 +243,7 @@ def extrato_do_dia(conta_id: str = "", canal: str = "") -> str:
         f"R$ {resumo['total_frete']:.2f} de frete, valor líquido sem imposto de R$ {resumo['total_liquido_sem_imposto']:.2f}, "
         f"R$ {resumo['total_imposto']:.2f} de imposto estimado, "
         f"margem líquida (já descontando o custo do produto) de R$ {resumo['total_margem']:.2f}, "
-        f"equivalente a {margem_pct} de margem de contribuição sobre o valor vendido.{aviso_custo}"
+        f"equivalente a {margem_pct} de margem de contribuição sobre o valor vendido.{aviso_custo}{aviso_cancelados}"
     )
 
 

@@ -106,7 +106,9 @@ CREATE TABLE IF NOT EXISTS custo_produtos (
 # Extrato diário de margem por venda (linha de pedido/SKU) - valores BRUTOS
 # capturados (preço, comissão, frete); imposto e margem são calculados na
 # consulta (database/extrato.py), não aqui, pra poder ajustar a alíquota
-# sem precisar reprocessar dados já coletados.
+# sem precisar reprocessar dados já coletados. status='pago' (venda de
+# verdade) ou 'cancelado' (aparece no extrato pra não sumir silenciosamente,
+# mas com valores zerados - não conta na margem).
 CRIAR_TABELA_ITENS_VENDA = """
 CREATE TABLE IF NOT EXISTS itens_venda (
     conta_id         TEXT,
@@ -119,14 +121,34 @@ CREATE TABLE IF NOT EXISTS itens_venda (
     preco_venda      REAL,
     comissao_ml      REAL,
     frete_vendedor   REAL,
+    status           TEXT DEFAULT 'pago',
     capturado_em     TEXT,
     PRIMARY KEY (conta_id, pedido_id, item_id)
 );
 """
 
+# Migrações incrementais - adicionam coluna a tabelas que já existiam antes
+# dela ser criada. "CREATE TABLE IF NOT EXISTS" não altera tabela já
+# existente, por isso precisa desse passo à parte. Cada entrada é
+# (tabela, coluna, definição) - o ALTER é tentado e o erro "column already
+# exists" (banco já migrado) é ignorado silenciosamente; qualquer outro
+# erro é propagado.
+_MIGRACOES_COLUNA = [
+    ("itens_venda", "status", "TEXT DEFAULT 'pago'"),
+]
+
+
+def _aplicar_migracoes(conexao) -> None:
+    for tabela, coluna, definicao in _MIGRACOES_COLUNA:
+        try:
+            conexao.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {definicao}")
+        except Exception as erro:
+            if "duplicate column" not in str(erro).lower():
+                raise
+
 
 def criar_tabelas() -> None:
-    """Cria todas as tabelas do banco, se ainda não existirem."""
+    """Cria todas as tabelas do banco, se ainda não existirem, e aplica migrações incrementais."""
     conexao = obter_conexao()
     try:
         conexao.execute(CRIAR_TABELA_CONTAS)
@@ -137,6 +159,7 @@ def criar_tabelas() -> None:
         conexao.execute(CRIAR_TABELA_PEDIDOS)
         conexao.execute(CRIAR_TABELA_CUSTO_PRODUTOS)
         conexao.execute(CRIAR_TABELA_ITENS_VENDA)
+        _aplicar_migracoes(conexao)
         conexao.commit()
         print(
             "Tabelas prontas: contas, anuncios, historico_anuncios_diario, "
