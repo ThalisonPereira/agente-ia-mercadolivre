@@ -33,12 +33,38 @@ def _montar_tabela_dados(linhas: list[dict]) -> str:
     return "\n".join(corpo)
 
 
+def _montar_resumo_precalculado(linhas: list[dict]) -> str:
+    """
+    Soma os totais em Python (não pede pro modelo contar) - tabelas grandes
+    (185+ anúncios) fazem até o modelo errar contagem simples ao escrever o
+    resumo (visto na prática: disse "2 vendas concretizadas" quando eram
+    3). Esses números são exatos e devem ser usados como estão, sem
+    recontar a partir da tabela.
+    """
+    anuncios_com_venda = sum(1 for l in linhas if l["vendas"] > 0)
+    unidades_vendidas = sum(l["vendas"] for l in linhas)
+    receita_total = sum(l["receita"] for l in linhas)
+    em_queda = sum(1 for l in linhas if l["status"] == "Queda")
+    em_alta = sum(1 for l in linhas if l["status"] == "Alta")
+
+    return (
+        f"Resumo pré-calculado (números exatos, some/conte a partir daqui - NÃO reconte a partir da tabela):\n"
+        f"- Total de anúncios monitorados: {len(linhas)}\n"
+        f"- Anúncios com pelo menos 1 venda no dia: {anuncios_com_venda}\n"
+        f"- Unidades vendidas no total: {unidades_vendidas}\n"
+        f"- Receita total do dia: R$ {receita_total:.2f}\n"
+        f"- Anúncios em Queda: {em_queda}\n"
+        f"- Anúncios em Alta: {em_alta}"
+    )
+
+
 def gerar_analise(linhas: list[dict], data: str) -> str:
     """Chama a API da Anthropic e retorna o resumo em texto para o dia."""
     config = carregar_configuracao_anthropic()
     client = anthropic.Anthropic(api_key=config.api_key)
 
     instrucoes = CAMINHO_PROMPT.read_text(encoding="utf-8")
+    resumo_precalculado = _montar_resumo_precalculado(linhas)
     tabela = _montar_tabela_dados(linhas)
 
     resposta = client.messages.create(
@@ -47,7 +73,11 @@ def gerar_analise(linhas: list[dict], data: str) -> str:
         system=instrucoes,
         messages=[{
             "role": "user",
-            "content": f"Dados de {data} ({len(linhas)} anúncio(s) monitorado(s)):\n\n{tabela}",
+            "content": (
+                f"Dados de {data} ({len(linhas)} anúncio(s) monitorado(s)):\n\n"
+                f"{resumo_precalculado}\n\n"
+                f"Tabela detalhada (pra citar anúncios específicos, não pra recontar totais):\n\n{tabela}"
+            ),
         }],
     )
 

@@ -130,9 +130,14 @@ CREATE TABLE IF NOT EXISTS itens_venda (
 # Migrações incrementais - adicionam coluna a tabelas que já existiam antes
 # dela ser criada. "CREATE TABLE IF NOT EXISTS" não altera tabela já
 # existente, por isso precisa desse passo à parte. Cada entrada é
-# (tabela, coluna, definição) - o ALTER é tentado e o erro "column already
-# exists" (banco já migrado) é ignorado silenciosamente; qualquer outro
-# erro é propagado.
+# (tabela, coluna, definição) - só tenta o ALTER se a coluna ainda não
+# existir (checado via PRAGMA table_info antes). Importante: NÃO dá pra
+# só tentar o ALTER e capturar o erro de "coluna já existe" - o cliente
+# HTTP do Turso (libsql_client) quebra com KeyError genérico nesse caso
+# específico (a API do Turso responde HTTP 200 com o erro dentro do corpo,
+# em vez de um status de erro; a lib só olha o status HTTP e tenta ler um
+# campo que não existe na resposta de erro) - então o ALTER redundante
+# derrubava toda escrita no banco (criar_tabelas roda em quase todo save).
 _MIGRACOES_COLUNA = [
     ("itens_venda", "status", "TEXT DEFAULT 'pago'"),
 ]
@@ -140,11 +145,11 @@ _MIGRACOES_COLUNA = [
 
 def _aplicar_migracoes(conexao) -> None:
     for tabela, coluna, definicao in _MIGRACOES_COLUNA:
-        try:
+        colunas_existentes = {
+            linha["name"] for linha in conexao.execute(f"PRAGMA table_info({tabela})").fetchall()
+        }
+        if coluna not in colunas_existentes:
             conexao.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {definicao}")
-        except Exception as erro:
-            if "duplicate column" not in str(erro).lower():
-                raise
 
 
 def criar_tabelas() -> None:
