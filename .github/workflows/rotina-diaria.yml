@@ -34,9 +34,18 @@ jobs:
 
       - name: Rodar rotina diária
         env:
-          ML_CLIENT_ID: ${{ secrets.ML_CLIENT_ID }}
-          ML_CLIENT_SECRET: ${{ secrets.ML_CLIENT_SECRET }}
-          ML_REDIRECT_URI: ${{ secrets.ML_REDIRECT_URI }}
+          ML_HC_CLIENT_ID: ${{ secrets.ML_HC_CLIENT_ID }}
+          ML_HC_CLIENT_SECRET: ${{ secrets.ML_HC_CLIENT_SECRET }}
+          ML_HC_REDIRECT_URI: ${{ secrets.ML_HC_REDIRECT_URI }}
+          ML_WC_CLIENT_ID: ${{ secrets.ML_WC_CLIENT_ID }}
+          ML_WC_CLIENT_SECRET: ${{ secrets.ML_WC_CLIENT_SECRET }}
+          ML_WC_REDIRECT_URI: ${{ secrets.ML_WC_REDIRECT_URI }}
+          ML_CC_CLIENT_ID: ${{ secrets.ML_CC_CLIENT_ID }}
+          ML_CC_CLIENT_SECRET: ${{ secrets.ML_CC_CLIENT_SECRET }}
+          ML_CC_REDIRECT_URI: ${{ secrets.ML_CC_REDIRECT_URI }}
+          BLING_CLIENT_ID: ${{ secrets.BLING_CLIENT_ID }}
+          BLING_CLIENT_SECRET: ${{ secrets.BLING_CLIENT_SECRET }}
+          BLING_REDIRECT_URI: ${{ secrets.BLING_REDIRECT_URI }}
           GOOGLE_SHEETS_ID: ${{ secrets.GOOGLE_SHEETS_ID }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
