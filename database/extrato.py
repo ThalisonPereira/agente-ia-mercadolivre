@@ -10,9 +10,11 @@ database/esquema.py); imposto e margem são calculados aqui, na consulta -
 mesmo princípio já usado em database/pedidos.py, pra poder ajustar a
 alíquota sem precisar reprocessar dados já coletados.
 
-Assim como em database/pedidos.py, cada item é capturado 1x, no dia da
-venda - por isso toda consulta aqui é pra UMA data específica, não uma
-soma de período.
+Cada item é capturado 1x, no dia da venda (mesma lógica de
+database/pedidos.py). As consultas aceitam um intervalo de datas
+(data_inicio/data_fim, iguais pra consultar 1 dia só) - o extrato some
+todo item vendido nesse intervalo, sem duplicar, já que cada linha tem
+sua própria data_venda gravada.
 """
 
 from datetime import date, datetime
@@ -138,6 +140,8 @@ def _calcular_linha(linha) -> dict:
     if status in _STATUS_SEM_RECEITA:
         return {
             "conta_id": linha["conta_id"],
+            "canal": linha["canal"],
+            "data_venda": linha["data_venda"],
             "pedido_id": linha["pedido_id"],
             "sku": linha["sku"],
             "titulo": linha["titulo"],
@@ -173,6 +177,8 @@ def _calcular_linha(linha) -> dict:
 
     return {
         "conta_id": linha["conta_id"],
+        "canal": linha["canal"],
+        "data_venda": linha["data_venda"],
         "pedido_id": linha["pedido_id"],
         "sku": linha["sku"],
         "titulo": linha["titulo"],
@@ -190,18 +196,25 @@ def _calcular_linha(linha) -> dict:
     }
 
 
-def obter_extrato(data: str, conta_id: str | None = None, canal: str | None = None) -> list[dict]:
-    """Extrato detalhado (1 linha por item vendido) de uma data específica, já com imposto/margem calculados."""
+def obter_extrato(
+    data_inicio: str, data_fim: str, conta_id: str | None = None, canal: str | None = None
+) -> list[dict]:
+    """
+    Extrato detalhado (1 linha por item vendido) num intervalo de datas
+    (inclusive - use data_inicio == data_fim pra consultar 1 dia só), já
+    com imposto/margem calculados.
+    """
     filtros_extra, parametros = _filtros(conta_id, canal)
-    parametros["data"] = data
+    parametros["data_inicio"] = data_inicio
+    parametros["data_fim"] = data_fim
     sql = f"""
-        SELECT v.conta_id, v.pedido_id, v.sku, v.titulo, v.quantidade,
+        SELECT v.conta_id, c.canal, v.data_venda, v.pedido_id, v.sku, v.titulo, v.quantidade,
                v.preco_venda, v.comissao_ml, v.frete_vendedor, v.status,
                v.custo_unitario_capturado
         FROM itens_venda v
         LEFT JOIN contas c ON c.conta_id = v.conta_id
-        WHERE v.data_venda = :data {filtros_extra}
-        ORDER BY v.preco_venda DESC
+        WHERE v.data_venda BETWEEN :data_inicio AND :data_fim {filtros_extra}
+        ORDER BY v.data_venda DESC, v.preco_venda DESC
     """
     conexao = obter_conexao()
     try:
@@ -212,9 +225,11 @@ def obter_extrato(data: str, conta_id: str | None = None, canal: str | None = No
     return [_calcular_linha(linha) for linha in linhas]
 
 
-def obter_resumo_extrato(data: str, conta_id: str | None = None, canal: str | None = None) -> dict:
-    """Totais do extrato numa data específica, incluindo quantos itens ficaram sem custo encontrado no Bling."""
-    itens = obter_extrato(data, conta_id, canal)
+def obter_resumo_extrato(
+    data_inicio: str, data_fim: str, conta_id: str | None = None, canal: str | None = None
+) -> dict:
+    """Totais do extrato num intervalo de datas, incluindo quantos itens ficaram sem custo encontrado no Bling."""
+    itens = obter_extrato(data_inicio, data_fim, conta_id, canal)
 
     resumo = {
         "total_itens": len(itens),

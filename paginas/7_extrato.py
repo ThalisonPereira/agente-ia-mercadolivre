@@ -1,15 +1,20 @@
 """
 paginas/7_extrato.py
 
-Extrato diário de margem por venda: pra cada item vendido (SKU) do dia
-mais recente coletado, mostra preço de venda, comissão do Mercado Livre,
-frete pago pelo vendedor, valor líquido sem imposto, imposto (14%),
-valor líquido final e o custo do produto (Bling), chegando na margem
-líquida. Cada coluna tem uma dica (tooltip) explicando o que representa.
-Ver database/extrato.py pra fórmula e limitações (ex: SKUs sem custo
+Extrato de margem por venda: pra cada item vendido (SKU) num intervalo de
+datas (1 dia, por padrão o mais recente coletado, ou um período
+customizado), mostra preço de venda, comissão do Mercado Livre, frete
+pago pelo vendedor, valor líquido sem imposto, imposto (14%), valor
+líquido final e o custo do produto (Bling), chegando na margem líquida.
+Cada coluna tem uma dica (tooltip) explicando o que representa. Quando o
+filtro reúne mais de uma conta/canal, a tabela mostra de qual conta/canal
+cada linha veio, pra não misturar tudo sem distinção. Ver
+database/extrato.py pra fórmula e limitações (ex: SKUs sem custo
 cadastrado no Bling ficam sinalizados, não silenciosamente tratados como
 custo zero).
 """
+
+from datetime import date
 
 import pandas as pd
 import streamlit as st
@@ -17,7 +22,7 @@ import streamlit as st
 from database.extrato import ALIQUOTA_IMPOSTO, obter_data_mais_recente, obter_extrato, obter_resumo_extrato
 from paginas._util_filtros import obter_filtros_sidebar
 
-st.title("📋 Extrato Diário")
+st.title("📋 Extrato")
 
 conta_id, canal = obter_filtros_sidebar()
 
@@ -26,9 +31,25 @@ if data_maxima is None:
     st.info("Ainda não há extrato coletado para esse filtro.")
     st.stop()
 
-st.caption(f"Snapshot de {data_maxima} - imposto estimado em {ALIQUOTA_IMPOSTO:.0%} sobre o preço de venda bruto.")
+data_maxima_date = date.fromisoformat(data_maxima)
 
-resumo = obter_resumo_extrato(data_maxima, conta_id, canal)
+col_data1, col_data2 = st.columns(2)
+data_inicio = col_data1.date_input("De", value=data_maxima_date, key="extrato_data_inicio")
+data_fim = col_data2.date_input("Até", value=data_maxima_date, key="extrato_data_fim")
+
+if data_inicio > data_fim:
+    st.error("A data inicial não pode ser depois da data final.")
+    st.stop()
+
+if data_inicio == data_fim:
+    st.caption(f"Dia {data_inicio.isoformat()} - imposto estimado em {ALIQUOTA_IMPOSTO:.0%} sobre o preço de venda bruto.")
+else:
+    st.caption(
+        f"Período de {data_inicio.isoformat()} a {data_fim.isoformat()} - "
+        f"imposto estimado em {ALIQUOTA_IMPOSTO:.0%} sobre o preço de venda bruto."
+    )
+
+resumo = obter_resumo_extrato(data_inicio.isoformat(), data_fim.isoformat(), conta_id, canal)
 
 col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("Total vendido", f"R$ {resumo['total_vendido']:,.2f}")
@@ -49,7 +70,7 @@ if resumo["itens_sem_custo"]:
     )
 if resumo["itens_cancelados"]:
     st.info(
-        f"🚫 {resumo['itens_cancelados']} pedido(s) cancelado(s) nesse dia aparecem na tabela abaixo com "
+        f"🚫 {resumo['itens_cancelados']} pedido(s) cancelado(s) aparecem na tabela abaixo com "
         "valores zerados - a venda não se concretizou, então não entram em nenhum total acima."
     )
 if resumo["itens_pendentes"]:
@@ -65,7 +86,7 @@ if resumo["itens_com_reclamacao"]:
         "ainda não calcula). Vale conferir manualmente no Mercado Livre."
     )
 
-itens = obter_extrato(data_maxima, conta_id, canal)
+itens = obter_extrato(data_inicio.isoformat(), data_fim.isoformat(), conta_id, canal)
 if itens:
     df = pd.DataFrame(itens)
     df["sku"] = df.apply(
@@ -80,13 +101,24 @@ if itens:
         "pendente": "⏳ Pendente",
         "pago_com_reclamacao": "⚠️ Pago (reclamação)",
     }).fillna(df["status"])
+
+    # Conta/canal e data só aparecem na tabela quando fazem diferença -
+    # filtro numa conta específica ou num único dia não precisa repetir a
+    # mesma informação em toda linha.
+    mostrar_conta = conta_id is None
+    mostrar_data = data_inicio != data_fim
+
+    colunas_iniciais = (["conta_id", "canal"] if mostrar_conta else []) + (["data_venda"] if mostrar_data else [])
     st.dataframe(
         df,
-        column_order=[
+        column_order=colunas_iniciais + [
             "status", "sku", "titulo", "quantidade", "preco_venda", "comissao_ml", "frete_vendedor",
             "valor_liquido_sem_imposto", "imposto", "valor_liquido", "custo_produto", "margem", "margem_percentual",
         ],
         column_config={
+            "conta_id": st.column_config.TextColumn("Conta", help="Conta do Mercado Livre (ou outro canal) de origem dessa venda."),
+            "canal": st.column_config.TextColumn("Canal", help="Canal de venda (ex: mercado_livre, shopee)."),
+            "data_venda": st.column_config.TextColumn("Data", help="Dia em que o pedido foi criado."),
             "status": st.column_config.TextColumn("Status", help="'Pago' = venda confirmada, entra nos totais. 'Cancelado'/'Pendente' = valores zerados, não entram nos totais. 'Pago (reclamação)' = venda confirmada mas com possível reembolso em aberto, revisar manualmente."),
             "sku": st.column_config.TextColumn("SKU", help="Código do produto no momento da venda - ⚠️ significa que não foi encontrado (ou tinha custo zerado) no Bling."),
             "titulo": st.column_config.TextColumn("Anúncio", help="Título do anúncio no Mercado Livre."),
@@ -104,3 +136,5 @@ if itens:
         hide_index=True,
         use_container_width=True,
     )
+else:
+    st.info("Nenhum item vendido nesse intervalo, pra esse filtro.")

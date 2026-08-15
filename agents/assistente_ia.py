@@ -225,7 +225,7 @@ def extrato_do_dia(conta_id: str = "", canal: str = "") -> str:
     if data is None:
         return "Ainda não há extrato de vendas coletado para esse filtro."
 
-    resumo = obter_resumo_extrato(data, conta_id or None, canal or None)
+    resumo = obter_resumo_extrato(data, data, conta_id or None, canal or None)
     aviso_custo = (
         f" {resumo['itens_sem_custo']} item(ns) sem custo encontrado no Bling, excluído(s) da margem."
         if resumo["itens_sem_custo"]
