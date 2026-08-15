@@ -52,9 +52,9 @@ def obter_ranking(
             a.item_id,
             a.titulo,
             a.sku,
-            SUM(h.visitas) AS total_visitas,
-            SUM(h.vendas_quantidade) AS total_vendas,
-            SUM(h.receita) AS total_receita
+            COALESCE(SUM(h.visitas), 0) AS total_visitas,
+            COALESCE(SUM(h.vendas_quantidade), 0) AS total_vendas,
+            COALESCE(SUM(h.receita), 0) AS total_receita
         FROM historico_anuncios_diario h
         JOIN anuncios a ON a.conta_id = h.conta_id AND a.item_id = h.item_id
         LEFT JOIN contas c ON c.conta_id = h.conta_id

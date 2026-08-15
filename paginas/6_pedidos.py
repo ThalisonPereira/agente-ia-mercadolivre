@@ -15,7 +15,7 @@ leitura (ver database/pedidos.py).
 
 import streamlit as st
 
-from database.pedidos import obter_data_mais_recente, obter_pedidos, obter_resumo
+from database.pedidos import obter_contas_desatualizadas, obter_data_mais_recente, obter_pedidos, obter_resumo
 from paginas._util_filtros import obter_filtros_sidebar
 
 st.title("📦 Pedidos")
@@ -28,6 +28,14 @@ if data_maxima is None:
     st.stop()
 
 st.caption(f"Snapshot de {data_maxima} - status capturado no dia do pedido, não é atualizado depois.")
+
+if not conta_id:
+    contas_atrasadas = obter_contas_desatualizadas(data_maxima, canal)
+    if contas_atrasadas:
+        st.warning(
+            f"⚠️ Conta(s) {', '.join(contas_atrasadas)} ainda não tem pedido de {data_maxima} "
+            "coletado - o(s) pedido(s) dela(s) não aparece(m) neste snapshot."
+        )
 
 resumo = obter_resumo(data_maxima, conta_id, canal)
 

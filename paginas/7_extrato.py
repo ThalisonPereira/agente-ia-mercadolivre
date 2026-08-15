@@ -43,24 +43,43 @@ col5.metric(
 if resumo["itens_sem_custo"]:
     st.warning(
         f"⚠️ {resumo['itens_sem_custo']} de {resumo['total_itens']} item(ns) sem custo encontrado no "
-        "Bling (SKU não cadastrado, ou custo zerado - comum em produtos 'pai'/kit) - a margem total "
-        "acima NÃO inclui esses itens, pra não distorcer o número."
+        "Bling (SKU não cadastrado, ou custo zerado - comum em produtos 'pai'/kit) - a 'Margem líquida' "
+        "acima NÃO inclui esses itens, pra não distorcer o número. Os outros totais ('Total vendido', "
+        "'Comissão + Frete', 'Imposto') continuam somando esses itens normalmente."
     )
 if resumo["itens_cancelados"]:
     st.info(
         f"🚫 {resumo['itens_cancelados']} pedido(s) cancelado(s) nesse dia aparecem na tabela abaixo com "
         "valores zerados - a venda não se concretizou, então não entram em nenhum total acima."
     )
+if resumo["itens_pendentes"]:
+    st.info(
+        f"⏳ {resumo['itens_pendentes']} item(ns) ainda aguardando confirmação de pagamento (ex: boleto) "
+        "aparecem com valores zerados - não entram em nenhum total acima. Assim que o pagamento for "
+        "confirmado, a próxima coleta corrige a linha automaticamente pra 'Pago', sem precisar de ação manual."
+    )
+if resumo["itens_com_reclamacao"]:
+    st.warning(
+        f"⚠️ {resumo['itens_com_reclamacao']} pedido(s) com possível reclamação/mediação em aberto - "
+        "os valores mostrados são os do pedido original (pode haver reembolso parcial que este sistema "
+        "ainda não calcula). Vale conferir manualmente no Mercado Livre."
+    )
 
 itens = obter_extrato(data_maxima, conta_id, canal)
 if itens:
     df = pd.DataFrame(itens)
     df["sku"] = df.apply(
-        lambda linha: linha["sku"] if linha["status"] == "cancelado" or linha["custo_produto"] is not None
+        lambda linha: linha["sku"]
+        if linha["status"] in ("cancelado", "pendente") or linha["custo_produto"] is not None
         else f"⚠️ {linha['sku'] or '(sem SKU)'}",
         axis=1,
     )
-    df["status"] = df["status"].map({"pago": "✅ Pago", "cancelado": "🚫 Cancelado"}).fillna(df["status"])
+    df["status"] = df["status"].map({
+        "pago": "✅ Pago",
+        "cancelado": "🚫 Cancelado",
+        "pendente": "⏳ Pendente",
+        "pago_com_reclamacao": "⚠️ Pago (reclamação)",
+    }).fillna(df["status"])
     st.dataframe(
         df,
         column_order=[
@@ -68,7 +87,7 @@ if itens:
             "valor_liquido_sem_imposto", "imposto", "valor_liquido", "custo_produto", "margem", "margem_percentual",
         ],
         column_config={
-            "status": st.column_config.TextColumn("Status", help="'Pago' = venda confirmada, entra nos totais. 'Cancelado' = pedido cancelado, valores zerados, não entra nos totais."),
+            "status": st.column_config.TextColumn("Status", help="'Pago' = venda confirmada, entra nos totais. 'Cancelado'/'Pendente' = valores zerados, não entram nos totais. 'Pago (reclamação)' = venda confirmada mas com possível reembolso em aberto, revisar manualmente."),
             "sku": st.column_config.TextColumn("SKU", help="Código do produto no momento da venda - ⚠️ significa que não foi encontrado (ou tinha custo zerado) no Bling."),
             "titulo": st.column_config.TextColumn("Anúncio", help="Título do anúncio no Mercado Livre."),
             "quantidade": st.column_config.NumberColumn("Qtd", help="Quantidade vendida nessa linha."),
@@ -78,7 +97,7 @@ if itens:
             "valor_liquido_sem_imposto": st.column_config.NumberColumn("Valor Líquido (sem imposto)", format="R$ %.2f", help="Preço de venda menos comissão do ML e frete - ainda SEM descontar o imposto."),
             "imposto": st.column_config.NumberColumn(f"Imposto ({ALIQUOTA_IMPOSTO:.0%})", format="R$ %.2f", help=f"Estimativa de imposto: {ALIQUOTA_IMPOSTO:.0%} sobre o preço de venda bruto."),
             "valor_liquido": st.column_config.NumberColumn("Valor Líquido", format="R$ %.2f", help="Valor líquido (sem imposto) menos o imposto estimado - o que sobra da venda antes do custo do produto."),
-            "custo_produto": st.column_config.NumberColumn("Custo", format="R$ %.2f", help="Custo do produto cadastrado no Bling (campo precoCusto), pelo SKU."),
+            "custo_produto": st.column_config.NumberColumn("Custo", format="R$ %.2f", help="Custo total da linha (custo unitário do Bling × quantidade), capturado no momento da coleta - não muda retroativamente se o custo mudar depois no Bling."),
             "margem": st.column_config.NumberColumn("Margem", format="R$ %.2f", help="Lucro real da venda: valor líquido menos o custo do produto."),
             "margem_percentual": st.column_config.NumberColumn("Margem %", format="%.1f%%", help="Margem de contribuição: margem (R$) dividida pelo preço de venda bruto, em %."),
         },

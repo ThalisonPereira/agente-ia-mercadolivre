@@ -26,6 +26,16 @@ from database.custo_produtos import sincronizar as sincronizar_custo_produtos
 from database.extrato import salvar_itens_venda_do_dia
 from agents.analista_ia import analisar_e_salvar
 
+# Quantos dias pra trás a rotina diária reprocessa o extrato de vendas (não
+# só "ontem"). Necessário porque um pedido pode ficar "pendente" (aguardando
+# confirmação de pagamento, ex: boleto) no dia em que é coletado e só virar
+# "pago"/"cancelado" depois - reprocessar essa janela corrige a linha
+# automaticamente assim que o status real mudar (ver
+# coletar_extrato_do_dia). Pedido que demore mais que isso pra confirmar
+# fica com o status desatualizado (limitação aceita, documentada, não
+# escondida - raríssimo em pagamentos no Brasil).
+DIAS_JANELA_RECONCILIACAO_EXTRATO = 5
+
 
 def _testar_configuracao() -> None:
     try:
@@ -134,8 +144,11 @@ def _rotina_diaria() -> None:
             print(f"[conta: {conta_id}] Falha ao coletar pedidos: {erro}")
 
         try:
-            itens_venda = obter_adaptador(conta_id, canal).coletar_extrato_do_dia(dia)
-            salvar_itens_venda_do_dia(conta_id, itens_venda, dia)
+            adaptador_extrato = obter_adaptador(conta_id, canal)
+            for offset in range(DIAS_JANELA_RECONCILIACAO_EXTRATO):
+                dia_reconciliacao = dia - timedelta(days=offset)
+                itens_venda = adaptador_extrato.coletar_extrato_do_dia(dia_reconciliacao)
+                salvar_itens_venda_do_dia(conta_id, itens_venda, dia_reconciliacao)
         except NotImplementedError as erro:
             print(f"[conta: {conta_id}] {erro}")
         except Exception as erro:

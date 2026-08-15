@@ -18,6 +18,7 @@ soma de período.
 from datetime import date, datetime
 
 from database.conexao_turso import obter_conexao
+from database.custo_produtos import obter_custo
 from database.esquema import criar_tabelas
 
 # Alíquota de imposto aplicada sobre o preço de venda BRUTO (confirmado
@@ -28,11 +29,13 @@ ALIQUOTA_IMPOSTO = 0.14
 UPSERT_ITEM_VENDA = """
 INSERT INTO itens_venda (
     conta_id, pedido_id, item_id, sku, titulo, data_venda,
-    quantidade, preco_venda, comissao_ml, frete_vendedor, status, capturado_em
+    quantidade, preco_venda, comissao_ml, frete_vendedor, status,
+    custo_unitario_capturado, capturado_em
 )
 VALUES (
     :conta_id, :pedido_id, :item_id, :sku, :titulo, :data_venda,
-    :quantidade, :preco_venda, :comissao_ml, :frete_vendedor, :status, :capturado_em
+    :quantidade, :preco_venda, :comissao_ml, :frete_vendedor, :status,
+    :custo_unitario_capturado, :capturado_em
 )
 ON CONFLICT(conta_id, pedido_id, item_id) DO UPDATE SET
     sku = excluded.sku,
@@ -43,6 +46,7 @@ ON CONFLICT(conta_id, pedido_id, item_id) DO UPDATE SET
     comissao_ml = excluded.comissao_ml,
     frete_vendedor = excluded.frete_vendedor,
     status = excluded.status,
+    custo_unitario_capturado = excluded.custo_unitario_capturado,
     capturado_em = excluded.capturado_em;
 """
 
@@ -86,6 +90,9 @@ def salvar_itens_venda_do_dia(conta_id: str, itens: list[dict], dia: date | None
                 "comissao_ml": item.get("comissao_ml", 0.0),
                 "frete_vendedor": item.get("frete_vendedor", 0.0),
                 "status": item.get("status", "pago"),
+                # Snapshot do custo unitário no momento da coleta (não um
+                # JOIN dinâmico na consulta) - ver esquema.py e _calcular_linha.
+                "custo_unitario_capturado": obter_custo(item.get("sku", "")),
                 "capturado_em": agora,
             })
             for item in itens
@@ -114,14 +121,21 @@ def obter_data_mais_recente(conta_id: str | None = None, canal: str | None = Non
     return linha["maxima"] if linha else None
 
 
+# Status que não representam receita confirmada - valores ficam zerados e
+# não entram em nenhum total do resumo (ver obter_resumo_extrato), mas a
+# linha continua visível no extrato pra não sumir silenciosamente.
+_STATUS_SEM_RECEITA = {"cancelado", "pendente"}
+
+
 def _calcular_linha(linha) -> dict:
     status = linha["status"] or "pago"
 
-    # Pedido cancelado: aparece no extrato (pra não sumir silenciosamente -
-    # o vendedor via essa venda na tela do Mercado Livre), mas todo valor
-    # em R$ fica zerado - não houve receita de verdade, então não deve
-    # entrar em nenhum total (venda, comissão, frete, margem).
-    if status == "cancelado":
+    # Cancelado: pedido cancelado de verdade, não houve receita.
+    # Pendente: ainda não confirmou pagamento no momento da coleta (ex:
+    # boleto) - a rotina diária reprocessa uma janela dos últimos dias, e
+    # essa linha é corrigida automaticamente pra "pago"/"cancelado" assim
+    # que o status real mudar (ver coletar_extrato_do_dia).
+    if status in _STATUS_SEM_RECEITA:
         return {
             "conta_id": linha["conta_id"],
             "pedido_id": linha["pedido_id"],
@@ -143,7 +157,12 @@ def _calcular_linha(linha) -> dict:
     preco_venda = linha["preco_venda"] or 0.0
     comissao_ml = linha["comissao_ml"] or 0.0
     frete_vendedor = linha["frete_vendedor"] or 0.0
-    custo_produto = linha["preco_custo"] if linha["preco_custo"] else None
+    custo_unitario = linha["custo_unitario_capturado"]
+    # Custo capturado é POR UNIDADE (ver database/custo_produtos.py) -
+    # precisa multiplicar pela quantidade da linha pra virar o custo total
+    # dessa venda, senão a margem fica inflada em qualquer linha com
+    # quantidade > 1.
+    custo_produto = (custo_unitario * linha["quantidade"]) if custo_unitario is not None else None
 
     valor_liquido_sem_imposto = preco_venda - comissao_ml - frete_vendedor
     imposto = preco_venda * ALIQUOTA_IMPOSTO
@@ -178,10 +197,9 @@ def obter_extrato(data: str, conta_id: str | None = None, canal: str | None = No
     sql = f"""
         SELECT v.conta_id, v.pedido_id, v.sku, v.titulo, v.quantidade,
                v.preco_venda, v.comissao_ml, v.frete_vendedor, v.status,
-               cp.preco_custo
+               v.custo_unitario_capturado
         FROM itens_venda v
         LEFT JOIN contas c ON c.conta_id = v.conta_id
-        LEFT JOIN custo_produtos cp ON cp.sku = v.sku
         WHERE v.data_venda = :data {filtros_extra}
         ORDER BY v.preco_venda DESC
     """
@@ -210,12 +228,19 @@ def obter_resumo_extrato(data: str, conta_id: str | None = None, canal: str | No
         "margem_percentual": None,
         "itens_sem_custo": 0,
         "itens_cancelados": 0,
+        "itens_pendentes": 0,
+        "itens_com_reclamacao": 0,
     }
     vendido_com_custo_conhecido = 0.0
     for item in itens:
         if item["status"] == "cancelado":
             resumo["itens_cancelados"] += 1
             continue
+        if item["status"] == "pendente":
+            resumo["itens_pendentes"] += 1
+            continue
+        if item["status"] == "pago_com_reclamacao":
+            resumo["itens_com_reclamacao"] += 1
         resumo["total_vendido"] += item["preco_venda"]
         resumo["total_comissao"] += item["comissao_ml"]
         resumo["total_frete"] += item["frete_vendedor"]

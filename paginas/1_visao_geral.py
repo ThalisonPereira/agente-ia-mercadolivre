@@ -83,7 +83,7 @@ else:
     st.info("Sem dados no período selecionado.")
 
 st.subheader("Análise da IA")
-analise = obter_ultima_analise(conta_id)
+analise = obter_ultima_analise(conta_id, canal)
 if analise is None:
     st.info("Ainda não há nenhuma análise gerada.")
 else:

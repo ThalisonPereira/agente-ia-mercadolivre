@@ -56,9 +56,9 @@ def buscar_por_sku_ou_titulo(
             a.item_id,
             a.titulo,
             a.sku,
-            SUM(h.visitas) AS total_visitas,
-            SUM(h.vendas_quantidade) AS total_vendas,
-            SUM(h.receita) AS total_receita,
+            COALESCE(SUM(h.visitas), 0) AS total_visitas,
+            COALESCE(SUM(h.vendas_quantidade), 0) AS total_vendas,
+            COALESCE(SUM(h.receita), 0) AS total_receita,
             MIN(h.data_snapshot) AS data_inicio,
             MAX(h.data_snapshot) AS data_fim
         FROM historico_anuncios_diario h

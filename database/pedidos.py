@@ -18,6 +18,7 @@ recente), nunca uma soma de status ao longo de um período.
 from datetime import date, datetime
 
 from database.conexao_turso import obter_conexao
+from database.contas import obter_contas_ativas
 from database.esquema import criar_tabelas
 
 UPSERT_PEDIDO = """
@@ -113,6 +114,23 @@ def obter_data_mais_recente(conta_id: str | None = None, canal: str | None = Non
     finally:
         conexao.close()
     return linha["maxima"] if linha else None
+
+
+def obter_contas_desatualizadas(data_referencia: str, canal: str | None = None) -> list[str]:
+    """
+    Retorna os conta_id das contas ATIVAS do canal cujo pedido mais recente
+    capturado é anterior a `data_referencia` - mesma lógica de
+    database/analisar_variacao.py::obter_contas_desatualizadas, usada pra
+    avisar quando o snapshot de Pedidos exibido não cobre todas as contas
+    do filtro escolhido (uma conta atrasada na coleta some silenciosamente).
+    """
+    contas = obter_contas_ativas(canal)
+    desatualizadas = []
+    for conta in contas:
+        maxima = obter_data_mais_recente(conta_id=conta["conta_id"])
+        if maxima is None or maxima < data_referencia:
+            desatualizadas.append(conta["conta_id"])
+    return desatualizadas
 
 
 def obter_resumo(data: str, conta_id: str | None = None, canal: str | None = None) -> dict:

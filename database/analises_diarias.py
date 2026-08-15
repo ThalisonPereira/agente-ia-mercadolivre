@@ -40,6 +40,15 @@ ORDER BY data DESC, gerado_em DESC
 LIMIT 1
 """
 
+QUERY_ULTIMA_ANALISE_POR_CANAL = """
+SELECT a.conta_id, a.data, a.texto, a.gerado_em
+FROM analises_diarias a
+JOIN contas c ON c.conta_id = a.conta_id
+WHERE c.canal = :canal
+ORDER BY a.data DESC, a.gerado_em DESC
+LIMIT 1
+"""
+
 
 def salvar_analise(data: str, texto: str, conta_id: str = CONTA_GERAL) -> None:
     """Grava (ou atualiza) a análise narrativa do dia informado, pra uma conta (ou 'geral')."""
@@ -58,16 +67,21 @@ def salvar_analise(data: str, texto: str, conta_id: str = CONTA_GERAL) -> None:
         conexao.close()
 
 
-def obter_ultima_analise(conta_id: str | None = None) -> dict | None:
+def obter_ultima_analise(conta_id: str | None = None, canal: str | None = None) -> dict | None:
     """
     Retorna a análise mais recente já gravada. Se `conta_id` for informado,
-    restringe a essa conta (ou 'geral'); senão, pega a mais recente entre
+    restringe a essa conta (ou 'geral'). Senão, se `canal` for informado,
+    restringe à análise mais recente entre as contas desse canal (evita
+    mostrar a narrativa de uma conta de outro canal quando o dashboard está
+    filtrado por canal). Sem nenhum dos dois, pega a mais recente entre
     todas as contas.
     """
     conexao = obter_conexao()
     try:
         if conta_id:
             linha = conexao.execute(QUERY_ULTIMA_ANALISE, {"conta_id": conta_id}).fetchone()
+        elif canal:
+            linha = conexao.execute(QUERY_ULTIMA_ANALISE_POR_CANAL, {"canal": canal}).fetchone()
         else:
             linha = conexao.execute(QUERY_ULTIMA_ANALISE_QUALQUER_CONTA).fetchone()
     finally:

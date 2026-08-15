@@ -9,6 +9,8 @@ nunca misturar anúncios de contas/canais diferentes que tenham o mesmo id).
 """
 
 from database.conexao_turso import obter_conexao
+from database.contas import obter_contas_ativas
+from database.kpis import obter_data_mais_recente as _obter_data_mais_recente_conta
 
 QUERY_COMPARACAO = """
 SELECT
@@ -20,7 +22,7 @@ SELECT
     h_novo.visitas AS visitas_atual,
     h_antigo.vendas_quantidade AS vendas_anterior,
     h_novo.vendas_quantidade AS vendas_atual,
-    h_novo.receita AS receita
+    COALESCE(h_novo.receita, 0) AS receita
 FROM historico_anuncios_diario h_novo
 JOIN historico_anuncios_diario h_antigo
     ON h_antigo.conta_id = h_novo.conta_id
@@ -82,6 +84,24 @@ def _obter_duas_datas_mais_recentes(
     data_final = linhas[0]["data_snapshot"]
     data_inicial = linhas[1]["data_snapshot"]
     return data_inicial, data_final
+
+
+def obter_contas_desatualizadas(data_referencia: str, canal: str | None = None) -> list[str]:
+    """
+    Retorna os conta_id das contas ATIVAS do canal (ou de todos os canais,
+    se `canal` não for informado) cujo snapshot mais recente é anterior a
+    `data_referencia` - usado pra avisar quando a comparação de Variação
+    está mostrando só um subconjunto das contas do filtro escolhido (uma
+    conta atrasada na coleta some silenciosamente da comparação, já que
+    ela não tem linha na data escolhida - ver paginas/3_variacao.py).
+    """
+    contas = obter_contas_ativas(canal)
+    desatualizadas = []
+    for conta in contas:
+        maxima = _obter_data_mais_recente_conta(conta_id=conta["conta_id"])
+        if maxima is None or maxima < data_referencia:
+            desatualizadas.append(conta["conta_id"])
+    return desatualizadas
 
 
 def obter_variacao_anuncios(

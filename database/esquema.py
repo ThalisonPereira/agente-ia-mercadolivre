@@ -140,6 +140,11 @@ CREATE TABLE IF NOT EXISTS itens_venda (
 # derrubava toda escrita no banco (criar_tabelas roda em quase todo save).
 _MIGRACOES_COLUNA = [
     ("itens_venda", "status", "TEXT DEFAULT 'pago'"),
+    # Custo unitário do produto (Bling) capturado no MOMENTO da coleta, não
+    # buscado por JOIN dinâmico na consulta - assim a margem de uma venda
+    # antiga não muda retroativamente se o custo mudar depois no Bling, e o
+    # cálculo já multiplica pela quantidade da linha (ver database/extrato.py).
+    ("itens_venda", "custo_unitario_capturado", "REAL"),
 ]
 
 

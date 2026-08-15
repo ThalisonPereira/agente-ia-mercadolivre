@@ -131,6 +131,35 @@ class MercadoLivreCanal:
         print(f"Conta: {usuario.get('nickname')} (id {usuario.get('id')})")
         print(f"Site: {usuario.get('site_id')}")
 
+    def testar_chamada_advertising(self) -> None:
+        """
+        Verifica se a permissão de Advertising (Mercado Ads/Product Ads) está
+        liberada pra essa conta - é um escopo separado da API core, precisa
+        ser habilitado à parte no painel do Mercado Livre Developers. Usa o
+        mesmo access_token da API core (a API de Advertising não tem OAuth
+        próprio), só chama um endpoint diferente.
+        """
+        headers = {**self._cabecalho(), "Api-Version": "1"}
+        resposta = requests.get(f"{BASE_URL}/advertising/advertisers", headers=headers,
+                                 params={"product_id": "PADS"}, timeout=15)
+
+        if resposta.status_code in (401, 403):
+            print(f"[conta: {self.conta_id}] Permissão de Advertising NÃO liberada "
+                  f"(status {resposta.status_code}). Resposta: {resposta.text}")
+            print("Solicite a permissão 'Advertising' no painel do Mercado Livre "
+                  "Developers para o app dessa conta antes de continuar.")
+            return
+
+        if resposta.status_code != 200:
+            print(f"[conta: {self.conta_id}] Erro inesperado ao consultar Advertising "
+                  f"(status {resposta.status_code}): {resposta.text}")
+            return
+
+        corpo = resposta.json()
+        advertisers = corpo.get("advertisers", corpo if isinstance(corpo, list) else [])
+        print(f"[conta: {self.conta_id}] Permissão de Advertising liberada.")
+        print(f"Advertiser(s) encontrado(s): {advertisers}")
+
     def _salvar_tokens(self, tokens: dict) -> None:
         """Salva os tokens no banco, incluindo o horário em que foram obtidos."""
         salvar_token(self.conta_id, {**tokens, "obtido_em": time.time()})
@@ -273,24 +302,34 @@ class MercadoLivreCanal:
         return visitas
 
     def _obter_pedidos_periodo(
-        self, seller_id: str, data_de: str, data_ate: str, status: str = "paid"
+        self, seller_id: str, data_de: str, data_ate: str, status: str | None = "paid"
     ) -> list[dict]:
-        """data_de/data_ate no formato 'YYYY-MM-DDTHH:MM:SS.000-00:00' (ISO 8601)."""
+        """
+        data_de/data_ate no formato 'YYYY-MM-DDTHH:MM:SS.000-00:00' (ISO 8601).
+
+        status=None omite o filtro 'order.status' e traz pedidos de QUALQUER
+        status criados na janela (confirmado ao vivo: omitir o parâmetro
+        retorna o mesmo total que somar as buscas por status individual,
+        incluindo 'cancelled') - usado por coletar_extrato_do_dia, que
+        precisa ver pedidos ainda não pagos pra não perdê-los depois.
+        """
         pedidos: list[dict] = []
         offset = 0
         limite = 50
 
+        params_base = {
+            "seller": seller_id,
+            "order.date_created.from": data_de,
+            "order.date_created.to": data_ate,
+            "limit": limite,
+        }
+        if status is not None:
+            params_base["order.status"] = status
+
         while True:
             resposta = self._get_com_retry(
                 f"{BASE_URL}/orders/search",
-                params={
-                    "seller": seller_id,
-                    "order.status": status,
-                    "order.date_created.from": data_de,
-                    "order.date_created.to": data_ate,
-                    "limit": limite,
-                    "offset": offset,
-                },
+                params={**params_base, "offset": offset},
             )
             resposta.raise_for_status()
             corpo = resposta.json()
@@ -406,34 +445,63 @@ class MercadoLivreCanal:
 
         return resultado
 
+    # Tags do Mercado Livre que indicam reclamação/mediação em andamento -
+    # pedido segue com status "paid", mas pode terminar em reembolso parcial
+    # que este código não sabe calcular. Lista curta e best-effort: nenhum
+    # pedido real com esse caso apareceu ainda pra confirmar o nome exato
+    # (ver nota em coletar_extrato_do_dia) - se um caso real aparecer e a
+    # tag não bater, é o primeiro lugar a revisar.
+    _TAGS_RECLAMACAO = {"mediation", "fraud_risk_detected", "claim"}
+
     def coletar_extrato_do_dia(self, dia: date) -> list[dict]:
         """
-        Busca os pedidos de um dia calendário completo e monta uma linha
-        por item vendido (SKU), com os valores brutos necessários pro
-        cálculo de margem em database/extrato.py: preço de venda, comissão
-        do Mercado Livre e frete pago pelo vendedor.
+        Busca os pedidos de um dia calendário completo (de QUALQUER status -
+        confirmado ao vivo que omitir 'order.status' traz o mesmo total que
+        somar as buscas por status individual) e monta uma linha por item
+        vendido (SKU), com os valores brutos necessários pro cálculo de
+        margem em database/extrato.py: preço de venda, comissão do Mercado
+        Livre e frete pago pelo vendedor.
 
-        Também busca os pedidos CANCELADOS do mesmo dia e inclui uma linha
-        pra cada um, com todos os valores zerados e status="cancelado" -
-        aparecem no extrato pra não sumir silenciosamente (o vendedor via
-        essa venda na tela "Anúncios" do próprio Mercado Livre, que conta
-        "vendas brutas" mesmo de pedidos depois cancelados), mas não
-        contam na margem (não houve receita de verdade).
+        Cada linha carrega o status real do pedido, mapeado para:
+        - "pago": status "paid" - conta na margem.
+        - "cancelado": status "cancelled" - valores zerados, aparece no
+          extrato pra não sumir silenciosamente (o vendedor via essa venda
+          na tela "Anúncios" do próprio Mercado Livre), mas não conta em
+          nenhum total.
+        - "pendente": qualquer outro status (aguardando pagamento, boleto
+          não compensado etc.) - valores zerados, não conta em nenhum
+          total, mas fica visível. Como a rotina diária reprocessa uma
+          janela dos últimos dias (não só ontem - ver main.py), um pedido
+          "pendente" que confirme o pagamento depois é corrigido pra
+          "pago" automaticamente na próxima rodada que reprocessar aquele
+          dia, sem precisar de nenhuma ação manual. Antes desta mudança, um
+          pedido que só confirmava pagamento 1+ dia depois de criado
+          simplesmente nunca era visto (a busca só olhava status=paid do
+          dia seguinte), e a venda sumia do extrato pra sempre.
+
+        Pedidos com tag de reclamação/mediação (ver _TAGS_RECLAMACAO) ficam
+        marcados com status "pago_com_reclamacao" em vez de "pago" - os
+        valores continuam os do pedido original (não sabemos o valor exato
+        de um eventual reembolso parcial), servindo só de sinalização
+        visual pra revisão manual, não de cálculo automático.
 
         'sale_fee' é tratado aqui como valor POR UNIDADE (mesma convenção
         de 'unit_price') - ainda sem um pedido real com quantity > 1 pra
-        confirmar isso com certeza; se aparecer um caso assim e a conta
-        não bater, é o primeiro lugar a revisar.
+        confirmar isso com certeza; quando isso acontece de verdade, um
+        aviso é impresso no console (ver abaixo) em vez de assumir em
+        silêncio.
 
-        Quando um pedido pago tem mais de 1 item compartilhando o mesmo
-        envio, o custo de frete do pedido é rateado proporcionalmente ao
-        valor de venda de cada item.
+        Quando um pedido tem mais de 1 item compartilhando o mesmo envio, o
+        custo de frete do pedido é rateado proporcionalmente ao valor de
+        venda de cada item - ou dividido igualmente se todos os itens do
+        pedido tiverem preço 0 (senão o frete inteiro desaparecia sem ser
+        alocado a nenhum item).
         """
         seller_id = self.obter_id_vendedor()
 
         pedidos_data_de = f"{dia.isoformat()}T00:00:00.000{FUSO_DATE_CREATED_PEDIDOS}"
         pedidos_data_ate = f"{dia.isoformat()}T23:59:59.000{FUSO_DATE_CREATED_PEDIDOS}"
-        pedidos = self._obter_pedidos_periodo(seller_id, pedidos_data_de, pedidos_data_ate)
+        pedidos = self._obter_pedidos_periodo(seller_id, pedidos_data_de, pedidos_data_ate, status=None)
 
         resultado = []
         for pedido in pedidos:
@@ -441,15 +509,48 @@ class MercadoLivreCanal:
             if not itens:
                 continue
 
+            status_ml = pedido.get("status")
+            if status_ml == "paid":
+                tags = set(pedido.get("tags") or [])
+                status = "pago_com_reclamacao" if tags & self._TAGS_RECLAMACAO else "pago"
+            elif status_ml == "cancelled":
+                status = "cancelado"
+            else:
+                status = "pendente"
+
+            if status in ("cancelado", "pendente"):
+                for item in itens:
+                    resultado.append({
+                        "pedido_id": str(pedido["id"]),
+                        "item_id": str(item.get("item", {}).get("id")),
+                        "sku": item.get("item", {}).get("seller_sku") or "",
+                        "titulo": item.get("item", {}).get("title", ""),
+                        "quantidade": item.get("quantity", 0),
+                        "preco_venda": 0.0,
+                        "comissao_ml": 0.0,
+                        "frete_vendedor": 0.0,
+                        "status": status,
+                    })
+                continue
+
             shipping_id = pedido.get("shipping", {}).get("id")
             frete_pedido = self._obter_custo_frete_vendedor(shipping_id) if shipping_id else 0.0
 
             precos_dos_itens = [item.get("unit_price", 0) * item.get("quantity", 0) for item in itens]
-            soma_precos = sum(precos_dos_itens) or 1  # evita divisão por zero
+            soma_precos = sum(precos_dos_itens)
 
             for item, preco_item in zip(itens, precos_dos_itens):
                 quantidade = item.get("quantity", 0)
-                frete_alocado = frete_pedido * (preco_item / soma_precos)
+                if quantidade > 1:
+                    print(
+                        f"[conta: {self.conta_id}] Pedido {pedido['id']} tem item com quantidade={quantidade} - "
+                        "comissão (sale_fee) tratada como valor por unidade, assumção ainda não confirmada "
+                        "contra um caso real. Revisar a margem desse pedido manualmente."
+                    )
+                if soma_precos:
+                    frete_alocado = frete_pedido * (preco_item / soma_precos)
+                else:
+                    frete_alocado = frete_pedido / len(itens)
                 resultado.append({
                     "pedido_id": str(pedido["id"]),
                     "item_id": str(item.get("item", {}).get("id")),
@@ -459,22 +560,7 @@ class MercadoLivreCanal:
                     "preco_venda": preco_item,
                     "comissao_ml": item.get("sale_fee", 0.0) * quantidade,
                     "frete_vendedor": frete_alocado,
-                    "status": "pago",
-                })
-
-        pedidos_cancelados = self._obter_pedidos_periodo(seller_id, pedidos_data_de, pedidos_data_ate, status="cancelled")
-        for pedido in pedidos_cancelados:
-            for item in pedido.get("order_items", []):
-                resultado.append({
-                    "pedido_id": str(pedido["id"]),
-                    "item_id": str(item.get("item", {}).get("id")),
-                    "sku": item.get("item", {}).get("seller_sku") or "",
-                    "titulo": item.get("item", {}).get("title", ""),
-                    "quantidade": item.get("quantity", 0),
-                    "preco_venda": 0.0,
-                    "comissao_ml": 0.0,
-                    "frete_vendedor": 0.0,
-                    "status": "cancelado",
+                    "status": status,
                 })
 
         return resultado

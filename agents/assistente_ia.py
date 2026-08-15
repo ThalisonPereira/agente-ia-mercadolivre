@@ -236,6 +236,16 @@ def extrato_do_dia(conta_id: str = "", canal: str = "") -> str:
         if resumo["itens_cancelados"]
         else ""
     )
+    aviso_pendentes = (
+        f" {resumo['itens_pendentes']} item(ns) ainda aguardando confirmação de pagamento (não contam em nenhum total)."
+        if resumo["itens_pendentes"]
+        else ""
+    )
+    aviso_reclamacao = (
+        f" {resumo['itens_com_reclamacao']} pedido(s) com possível reclamação/mediação em aberto, vale revisar manualmente."
+        if resumo["itens_com_reclamacao"]
+        else ""
+    )
     margem_pct = f"{resumo['margem_percentual']:.1f}%" if resumo["margem_percentual"] is not None else "indisponível"
     return (
         f"Extrato de {data}: {resumo['total_itens']} item(ns) vendido(s), "
@@ -243,7 +253,8 @@ def extrato_do_dia(conta_id: str = "", canal: str = "") -> str:
         f"R$ {resumo['total_frete']:.2f} de frete, valor líquido sem imposto de R$ {resumo['total_liquido_sem_imposto']:.2f}, "
         f"R$ {resumo['total_imposto']:.2f} de imposto estimado, "
         f"margem líquida (já descontando o custo do produto) de R$ {resumo['total_margem']:.2f}, "
-        f"equivalente a {margem_pct} de margem de contribuição sobre o valor vendido.{aviso_custo}{aviso_cancelados}"
+        f"equivalente a {margem_pct} de margem de contribuição sobre o valor vendido."
+        f"{aviso_custo}{aviso_cancelados}{aviso_pendentes}{aviso_reclamacao}"
     )
 
 

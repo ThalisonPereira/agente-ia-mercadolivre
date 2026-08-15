@@ -10,7 +10,7 @@ comportamento, só passando o filtro de conta/canal da sidebar.
 import pandas as pd
 import streamlit as st
 
-from database.analisar_variacao import obter_variacao_anuncios
+from database.analisar_variacao import obter_contas_desatualizadas, obter_variacao_anuncios
 from paginas._util_filtros import obter_filtros_sidebar
 
 st.title("📈 Variação")
@@ -28,11 +28,20 @@ else:
     data_comparacao = resultado[0]["data"]
     st.caption(f"Comparando com o dia de snapshot anterior, até {data_comparacao}.")
 
+    if not conta_id:
+        contas_atrasadas = obter_contas_desatualizadas(data_comparacao, canal)
+        if contas_atrasadas:
+            st.warning(
+                f"⚠️ Conta(s) {', '.join(contas_atrasadas)} ainda não tem dado de {data_comparacao} "
+                "coletado - o(s) anúncio(s) dela(s) não aparece(m) nesta comparação."
+            )
+
     contagem_status = pd.Series([linha["status"] for linha in resultado]).value_counts()
     col1, col2, col3 = st.columns(3)
     col1.metric("📈 Alta", int(contagem_status.get("Alta", 0)))
     col2.metric("📉 Queda", int(contagem_status.get("Queda", 0)))
     col3.metric("➖ Estável", int(contagem_status.get("Estável", 0)))
+    st.caption("Os números acima são o total geral da comparação - não mudam conforme o filtro de status abaixo.")
 
     filtro_status = st.multiselect(
         "Status", ["Queda", "Alta", "Estável"], default=["Queda", "Alta", "Estável"], key="variacao_status"
