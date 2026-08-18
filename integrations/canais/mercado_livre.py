@@ -228,15 +228,20 @@ class MercadoLivreCanal:
     def _cabecalho(self) -> dict:
         return {"Authorization": f"Bearer {self._token_valido()}"}
 
-    def _get_com_retry(self, url: str, params: dict, timeout: int = 15) -> requests.Response:
+    def _get_com_retry(
+        self, url: str, params: dict, timeout: int = 15, headers_extra: dict | None = None
+    ) -> requests.Response:
         """
         GET com retry automático em caso de rate limit (429) ou erro
         temporário do servidor (5xx): espera o tempo indicado em
         'Retry-After' (ou um backoff crescente) e tenta de novo, em vez de
-        derrubar o script inteiro.
+        derrubar o script inteiro. `headers_extra` complementa (não
+        substitui) o cabeçalho de autenticação - usado por endpoints que
+        exigem um header extra, como 'api-version' na API de Ads.
         """
+        headers = {**self._cabecalho(), **(headers_extra or {})}
         for tentativa in range(MAX_TENTATIVAS_RATE_LIMIT):
-            resposta = requests.get(url, headers=self._cabecalho(), params=params, timeout=timeout)
+            resposta = requests.get(url, headers=headers, params=params, timeout=timeout)
             if resposta.status_code != 429 and resposta.status_code < 500:
                 return resposta
 
@@ -562,5 +567,155 @@ class MercadoLivreCanal:
                     "frete_vendedor": frete_alocado,
                     "status": status,
                 })
+
+        return resultado
+
+    # ------------------------------------------------------------------
+    # Publicidade (Mercado Ads / Product Ads)
+    # ------------------------------------------------------------------
+
+    def _obter_advertiser_id(self) -> tuple[int, str] | None:
+        """
+        GET /advertising/advertisers - retorna (advertiser_id, site_id) da
+        conta pra Product Ads (product_id=PADS), ou None se a conta não
+        tiver a permissão de Advertising liberada (não é erro - permite
+        contas futuras sem esse produto habilitado sem quebrar a rotina).
+        """
+        headers = {**self._cabecalho(), "Api-Version": "1"}
+        resposta = requests.get(
+            f"{BASE_URL}/advertising/advertisers", headers=headers, params={"product_id": "PADS"}, timeout=15
+        )
+        if resposta.status_code != 200:
+            return None
+
+        corpo = resposta.json()
+        advertisers = corpo.get("advertisers", corpo if isinstance(corpo, list) else [])
+        for anunciante in advertisers:
+            if anunciante.get("site_id") == "MLB":
+                return anunciante["advertiser_id"], "MLB"
+        return None
+
+    # Lista completa de métricas documentadas pra campanhas/anúncios -
+    # pedidas sempre juntas, pra guardar o máximo de dado possível de uma
+    # vez (alinhado com o usuário) sem múltiplas chamadas por métrica.
+    _METRICAS_ADS = (
+        "clicks,prints,ctr,cost,cpc,acos,cvr,roas,"
+        "direct_amount,indirect_amount,total_amount,"
+        "direct_units_quantity,indirect_units_quantity,units_quantity"
+    )
+
+    def coletar_campanhas_ads_do_dia(self, dia: date) -> list[dict]:
+        """
+        Busca as campanhas de Product Ads e suas métricas de um dia
+        calendário completo (date_from == date_to), pra essa conta. Retorna
+        [] se a conta não tiver Advertising liberado.
+        """
+        advertiser = self._obter_advertiser_id()
+        if advertiser is None:
+            return []
+        advertiser_id, site_id = advertiser
+
+        resultado: list[dict] = []
+        offset = 0
+        limite = 50
+        while True:
+            resposta = self._get_com_retry(
+                f"{BASE_URL}/advertising/{site_id}/advertisers/{advertiser_id}/product_ads/campaigns/search",
+                params={
+                    "limit": limite, "offset": offset,
+                    "date_from": dia.isoformat(), "date_to": dia.isoformat(),
+                    "metrics": self._METRICAS_ADS,
+                },
+                headers_extra={"api-version": "2"},
+            )
+            resposta.raise_for_status()
+            corpo = resposta.json()
+            pagina = corpo.get("results", [])
+
+            for campanha in pagina:
+                metricas = campanha.get("metrics", {})
+                resultado.append({
+                    "campaign_id": campanha["id"],
+                    "nome": campanha.get("name", ""),
+                    "status": campanha.get("status", ""),
+                    "strategy": campanha.get("strategy", ""),
+                    "budget": campanha.get("budget", 0.0),
+                    "acos_target": campanha.get("acos_target"),
+                    "roas_target": campanha.get("roas_target"),
+                    "clicks": metricas.get("clicks", 0),
+                    "prints": metricas.get("prints", 0),
+                    "cost": metricas.get("cost", 0.0),
+                    "cpc": metricas.get("cpc", 0.0),
+                    "ctr": metricas.get("ctr", 0.0),
+                    "acos": metricas.get("acos", 0.0),
+                    "cvr": metricas.get("cvr", 0.0),
+                    "roas": metricas.get("roas", 0.0),
+                    "direct_amount": metricas.get("direct_amount", 0.0),
+                    "indirect_amount": metricas.get("indirect_amount", 0.0),
+                    "total_amount": metricas.get("total_amount", 0.0),
+                    "direct_units_quantity": metricas.get("direct_units_quantity", 0),
+                    "indirect_units_quantity": metricas.get("indirect_units_quantity", 0),
+                    "units_quantity": metricas.get("units_quantity", 0),
+                })
+
+            total = corpo.get("paging", {}).get("total", 0)
+            offset += limite
+            if offset >= total or not pagina:
+                break
+
+        return resultado
+
+    def coletar_anuncios_ads_do_dia(self, dia: date) -> list[dict]:
+        """
+        Busca os anúncios em Product Ads (ativos/pausados - ignora
+        'idle'/'hold'/'delegated'/'revoked', que não têm métrica nenhuma)
+        e suas métricas de um dia calendário completo, pra essa conta.
+        Retorna [] se a conta não tiver Advertising liberado.
+        """
+        advertiser = self._obter_advertiser_id()
+        if advertiser is None:
+            return []
+        advertiser_id, site_id = advertiser
+
+        resultado: list[dict] = []
+        offset = 0
+        limite = 50
+        while True:
+            resposta = self._get_com_retry(
+                f"{BASE_URL}/advertising/{site_id}/advertisers/{advertiser_id}/product_ads/ads/search",
+                params={
+                    "limit": limite, "offset": offset,
+                    "date_from": dia.isoformat(), "date_to": dia.isoformat(),
+                    "metrics": self._METRICAS_ADS,
+                    "filters[statuses]": "active,paused",
+                },
+                headers_extra={"api-version": "2"},
+            )
+            resposta.raise_for_status()
+            corpo = resposta.json()
+            pagina = corpo.get("results", [])
+
+            for anuncio in pagina:
+                metricas = anuncio.get("metrics", {})
+                resultado.append({
+                    "item_id": anuncio.get("item_id", ""),
+                    "campaign_id": anuncio.get("campaign_id"),
+                    "titulo": anuncio.get("title", ""),
+                    "status": anuncio.get("status", ""),
+                    "clicks": metricas.get("clicks", 0),
+                    "prints": metricas.get("prints", 0),
+                    "cost": metricas.get("cost", 0.0),
+                    "cpc": metricas.get("cpc", 0.0),
+                    "acos": metricas.get("acos", 0.0),
+                    "direct_amount": metricas.get("direct_amount", 0.0),
+                    "indirect_amount": metricas.get("indirect_amount", 0.0),
+                    "total_amount": metricas.get("total_amount", 0.0),
+                    "units_quantity": metricas.get("units_quantity", 0),
+                })
+
+            total = corpo.get("paging", {}).get("total", 0)
+            offset += limite
+            if offset >= total or not pagina:
+                break
 
         return resultado

@@ -23,6 +23,8 @@ FUSO_BRASILIA = ZoneInfo("America/Sao_Paulo")
 from database.analisar_variacao import obter_variacao_anuncios
 from database.analises_diarias import obter_ultima_analise
 from database.consultar_anuncio import buscar_por_sku_ou_titulo
+from database.ads import obter_data_mais_recente as obter_data_mais_recente_ads
+from database.ads import obter_resumo as obter_resumo_ads
 from database.extrato import obter_data_mais_recente as obter_data_mais_recente_extrato
 from database.extrato import obter_resumo_extrato
 from database.pedidos import obter_data_mais_recente as obter_data_mais_recente_pedidos
@@ -258,8 +260,37 @@ def extrato_do_dia(conta_id: str = "", canal: str = "") -> str:
     )
 
 
+@beta_tool
+def publicidade_do_dia(conta_id: str = "", canal: str = "") -> str:
+    """Retorna o resumo de publicidade (Mercado Ads/Product Ads) do dia
+    mais recente coletado: total investido, vendas atribuídas à
+    publicidade (diretas + indiretas), ACOS, ROAS, cliques, impressões e
+    CTR. Não inclui recomendação de ação - pra isso, use a ferramenta
+    ultima_analise com o texto focado em publicidade (ver página
+    Publicidade do painel).
+
+    Args:
+        conta_id: Restringe a uma conta específica (ex: "hc"), opcional.
+        canal: Restringe a um canal inteiro (ex: "mercado_livre", "shopee", "amazon"), opcional.
+    """
+    data = obter_data_mais_recente_ads(conta_id or None, canal or None)
+    if data is None:
+        return "Ainda não há dado de publicidade coletado para esse filtro."
+
+    resumo = obter_resumo_ads(data, data, conta_id or None, canal or None)
+    return (
+        f"Publicidade de {data}: R$ {resumo['cost']:.2f} investido(s), "
+        f"R$ {resumo['total_amount']:.2f} em vendas atribuídas "
+        f"(diretas: R$ {resumo['direct_amount']:.2f}, indiretas: R$ {resumo['indirect_amount']:.2f}), "
+        f"ACOS {resumo['acos']:.1f}%, ROAS {resumo['roas']:.1f}x, "
+        f"{resumo['clicks']} clique(s) em {resumo['prints']} impressão(ões) (CTR {resumo['ctr']:.2f}%), "
+        f"{resumo['units_quantity']} unidade(s) vendida(s) por publicidade."
+    )
+
+
 FERRAMENTAS = [
     consultar_sku, variacao_recente, ranking_periodo, ultima_analise, pedidos_do_dia, extrato_do_dia,
+    publicidade_do_dia,
 ]
 
 

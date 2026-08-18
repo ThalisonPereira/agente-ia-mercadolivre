@@ -127,6 +127,76 @@ CREATE TABLE IF NOT EXISTS itens_venda (
 );
 """
 
+# Publicidade (Mercado Ads / Product Ads) - 1 linha por campanha/anúncio por
+# dia (mesmo princípio de historico_anuncios_diario), com as métricas já
+# somadas pro dia pela própria API do Mercado Livre (date_from == date_to).
+# item_id segue a mesma convenção da tabela anuncios, pra permitir cruzar
+# custo de publicidade com margem no futuro (não implementado ainda).
+CRIAR_TABELA_ADS_CAMPANHAS_DIARIO = """
+CREATE TABLE IF NOT EXISTS ads_campanhas_diario (
+    conta_id                TEXT,
+    campaign_id              INTEGER,
+    data                     TEXT,
+    nome                     TEXT,
+    status                   TEXT,
+    strategy                 TEXT,
+    budget                   REAL,
+    acos_target              REAL,
+    roas_target              REAL,
+    clicks                   INTEGER,
+    prints                   INTEGER,
+    cost                     REAL,
+    cpc                      REAL,
+    ctr                      REAL,
+    acos                     REAL,
+    cvr                      REAL,
+    roas                     REAL,
+    direct_amount            REAL,
+    indirect_amount          REAL,
+    total_amount             REAL,
+    direct_units_quantity    INTEGER,
+    indirect_units_quantity  INTEGER,
+    units_quantity           INTEGER,
+    capturado_em             TEXT,
+    PRIMARY KEY (conta_id, campaign_id, data)
+);
+"""
+
+CRIAR_TABELA_ADS_ANUNCIOS_DIARIO = """
+CREATE TABLE IF NOT EXISTS ads_anuncios_diario (
+    conta_id         TEXT,
+    item_id          TEXT,
+    campaign_id      INTEGER,
+    data             TEXT,
+    titulo           TEXT,
+    status           TEXT,
+    clicks           INTEGER,
+    prints           INTEGER,
+    cost             REAL,
+    cpc              REAL,
+    acos             REAL,
+    direct_amount    REAL,
+    indirect_amount  REAL,
+    total_amount     REAL,
+    units_quantity   INTEGER,
+    capturado_em     TEXT,
+    PRIMARY KEY (conta_id, item_id, data)
+);
+"""
+
+# Análise narrativa diária da IA especializada em publicidade - mesmo shape
+# de analises_diarias, em tabela separada porque o conteúdo/prompt é bem
+# diferente (foco em ACOS/ROAS/orçamento, não visitas/vendas orgânicas).
+CRIAR_TABELA_ANALISES_ADS_DIARIAS = """
+CREATE TABLE IF NOT EXISTS analises_ads_diarias (
+    conta_id     TEXT,
+    data         TEXT,
+    texto        TEXT,
+    gerado_em    TEXT,
+    PRIMARY KEY (conta_id, data)
+);
+"""
+
 # Migrações incrementais - adicionam coluna a tabelas que já existiam antes
 # dela ser criada. "CREATE TABLE IF NOT EXISTS" não altera tabela já
 # existente, por isso precisa desse passo à parte. Cada entrada é
@@ -169,11 +239,15 @@ def criar_tabelas() -> None:
         conexao.execute(CRIAR_TABELA_PEDIDOS)
         conexao.execute(CRIAR_TABELA_CUSTO_PRODUTOS)
         conexao.execute(CRIAR_TABELA_ITENS_VENDA)
+        conexao.execute(CRIAR_TABELA_ADS_CAMPANHAS_DIARIO)
+        conexao.execute(CRIAR_TABELA_ADS_ANUNCIOS_DIARIO)
+        conexao.execute(CRIAR_TABELA_ANALISES_ADS_DIARIAS)
         _aplicar_migracoes(conexao)
         conexao.commit()
         print(
             "Tabelas prontas: contas, anuncios, historico_anuncios_diario, "
-            "analises_diarias, tokens_oauth, pedidos, custo_produtos, itens_venda."
+            "analises_diarias, tokens_oauth, pedidos, custo_produtos, itens_venda, "
+            "ads_campanhas_diario, ads_anuncios_diario, analises_ads_diarias."
         )
     finally:
         conexao.close()

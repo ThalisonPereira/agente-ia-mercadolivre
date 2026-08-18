@@ -24,7 +24,9 @@ from database.historico_completo import obter_datas_existentes
 from database.pedidos import salvar_pedidos_do_dia
 from database.custo_produtos import sincronizar as sincronizar_custo_produtos
 from database.extrato import salvar_itens_venda_do_dia
+from database.ads import salvar_campanhas_do_dia, salvar_anuncios_do_dia
 from agents.analista_ia import analisar_e_salvar
+from agents.analista_ads_ia import analisar_e_salvar_ads
 
 # Quantos dias pra trás a rotina diária reprocessa o extrato de vendas (não
 # só "ontem"). Necessário porque um pedido pode ficar "pendente" (aguardando
@@ -153,6 +155,19 @@ def _rotina_diaria() -> None:
             print(f"[conta: {conta_id}] {erro}")
         except Exception as erro:
             print(f"[conta: {conta_id}] Falha ao coletar extrato de vendas: {erro}")
+
+        try:
+            adaptador_ads = obter_adaptador(conta_id, canal)
+            campanhas_ads = adaptador_ads.coletar_campanhas_ads_do_dia(dia)
+            salvar_campanhas_do_dia(conta_id, campanhas_ads, dia)
+            anuncios_ads = adaptador_ads.coletar_anuncios_ads_do_dia(dia)
+            salvar_anuncios_do_dia(conta_id, anuncios_ads, dia)
+            if campanhas_ads:
+                analisar_e_salvar_ads(campanhas_ads, dia.isoformat(), conta_id=conta_id)
+        except NotImplementedError as erro:
+            print(f"[conta: {conta_id}] {erro}")
+        except Exception as erro:
+            print(f"[conta: {conta_id}] Falha ao coletar publicidade: {erro}")
 
         variacao = obter_variacao_anuncios(conta_id=conta_id)
         if variacao is None:
