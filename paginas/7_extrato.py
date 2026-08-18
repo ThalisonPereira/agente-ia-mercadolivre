@@ -19,6 +19,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
+from database.contas import obter_contas_ativas
 from database.extrato import ALIQUOTA_IMPOSTO, obter_data_mais_recente, obter_extrato, obter_resumo_extrato
 from paginas._util_filtros import obter_filtros_sidebar
 
@@ -85,6 +86,45 @@ if resumo["itens_com_reclamacao"]:
         "os valores mostrados são os do pedido original (pode haver reembolso parcial que este sistema "
         "ainda não calcula). Vale conferir manualmente no Mercado Livre."
     )
+
+if conta_id is None:
+    contas = obter_contas_ativas(canal)
+    if len(contas) > 1:
+        st.subheader("Resumo por conta")
+        linhas_por_conta = []
+        for conta in contas:
+            resumo_conta = obter_resumo_extrato(
+                data_inicio.isoformat(), data_fim.isoformat(), conta_id=conta["conta_id"], canal=None
+            )
+            if resumo_conta["total_itens"] == 0:
+                continue
+            linhas_por_conta.append({
+                "conta_id": conta["conta_id"],
+                "nome": conta["nome"],
+                "total_vendido": resumo_conta["total_vendido"],
+                "comissao_frete": resumo_conta["total_comissao"] + resumo_conta["total_frete"],
+                "imposto": resumo_conta["total_imposto"],
+                "margem_liquida": resumo_conta["total_margem"],
+                "margem_percentual": resumo_conta["margem_percentual"],
+            })
+        if linhas_por_conta:
+            st.dataframe(
+                pd.DataFrame(linhas_por_conta),
+                column_config={
+                    "conta_id": st.column_config.TextColumn("Conta"),
+                    "nome": st.column_config.TextColumn("Nome"),
+                    "total_vendido": st.column_config.NumberColumn("Total vendido", format="R$ %.2f"),
+                    "comissao_frete": st.column_config.NumberColumn("Comissão + Frete", format="R$ %.2f"),
+                    "imposto": st.column_config.NumberColumn(f"Imposto ({ALIQUOTA_IMPOSTO:.0%})", format="R$ %.2f"),
+                    "margem_liquida": st.column_config.NumberColumn("Margem líquida", format="R$ %.2f"),
+                    "margem_percentual": st.column_config.NumberColumn(
+                        "Margem %", format="%.1f%%",
+                        help="Não inclui itens sem custo encontrado no Bling, mesmo critério do resumo combinado acima.",
+                    ),
+                },
+                hide_index=True,
+                use_container_width=True,
+            )
 
 itens = obter_extrato(data_inicio.isoformat(), data_fim.isoformat(), conta_id, canal)
 if itens:
