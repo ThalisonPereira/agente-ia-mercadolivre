@@ -16,6 +16,7 @@ import pandas as pd
 import streamlit as st
 
 from database.analises_diarias import obter_ultima_analise
+from database.contas import obter_contas_ativas
 from database.kpis import obter_data_mais_recente, obter_serie_diaria, obter_totais_periodo
 from paginas._util_filtros import obter_filtros_sidebar
 
@@ -107,9 +108,30 @@ else:
     st.info("Sem dados no período selecionado.")
 
 st.subheader("Análise da IA")
-analise = obter_ultima_analise(conta_id, canal)
-if analise is None:
-    st.info("Ainda não há nenhuma análise gerada.")
+
+if conta_id:
+    # Filtro já restrito a 1 conta específica - 1 bloco só, como antes.
+    analise = obter_ultima_analise(conta_id, canal)
+    if analise is None:
+        st.info("Ainda não há nenhuma análise gerada.")
+    else:
+        st.caption(f"Conta '{analise['conta_id']}' — {analise['data']} (gerada em {analise['gerado_em']})")
+        st.markdown(analise["texto"])
 else:
-    st.caption(f"Conta '{analise['conta_id']}' — {analise['data']} (gerada em {analise['gerado_em']})")
-    st.markdown(analise["texto"])
+    # "Todas as contas" ou um canal inteiro - uma narrativa combinada
+    # misturaria o contexto de contas diferentes numa leitura só. Mostra
+    # um bloco por conta em vez de escolher "a mais recente entre todas".
+    contas = obter_contas_ativas(canal)
+    blocos = []
+    for conta in contas:
+        analise = obter_ultima_analise(conta_id=conta["conta_id"])
+        if analise is not None:
+            blocos.append((conta, analise))
+
+    if not blocos:
+        st.info("Ainda não há nenhuma análise gerada.")
+    else:
+        for conta, analise in blocos:
+            with st.expander(f"{conta['nome']} ({conta['conta_id']})", expanded=True):
+                st.caption(f"{analise['data']} (gerada em {analise['gerado_em']})")
+                st.markdown(analise["texto"])

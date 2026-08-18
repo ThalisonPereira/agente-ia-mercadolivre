@@ -22,11 +22,15 @@ MODELO = "claude-haiku-4-5"
 
 def _montar_tabela_dados(linhas: list[dict]) -> str:
     """Formata as linhas de variação como uma tabela compacta em texto para o prompt."""
-    cabecalho = "Anúncio | Visitas | Vendas | Receita (R$) | Var. Visitas | Var. Vendas | Status"
+    cabecalho = "SKU/ID | Anúncio | Visitas | Vendas | Receita (R$) | Var. Visitas | Var. Vendas | Status"
     corpo = [cabecalho, "-" * len(cabecalho)]
     for linha in linhas:
+        # Fallback pro item_id (formatado como "#1234...", mesma convenção
+        # já usada em paginas/2_ranking.py) quando não há SKU cadastrado -
+        # sempre dá pra citar um anúncio específico com precisão.
+        identificador = linha["sku"] or linha["item_id"].replace("MLB", "#")
         corpo.append(
-            f"{linha['anuncio']} | {linha['visitas']} | {linha['vendas']} | "
+            f"{identificador} | {linha['anuncio']} | {linha['visitas']} | {linha['vendas']} | "
             f"{linha['receita']:.2f} | {linha['variacao_visitas']}% | "
             f"{linha['variacao_vendas']}% | {linha['status']}"
         )
