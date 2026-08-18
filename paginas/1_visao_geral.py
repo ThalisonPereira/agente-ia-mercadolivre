@@ -11,6 +11,7 @@ de abrir o dashboard.
 
 from datetime import date, timedelta
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -77,8 +78,31 @@ st.caption(f"Comparado a {data_inicio_anterior.isoformat()} — {data_fim_anteri
 
 serie = obter_serie_diaria(data_inicio.isoformat(), data_fim.isoformat(), conta_id, canal)
 if serie:
-    df_serie = pd.DataFrame(serie).set_index("data")
-    st.line_chart(df_serie[["receita", "visitas", "vendas"]])
+    # Vendas (unidades, dezenas por dia) fica visualmente colada em zero se
+    # dividir o mesmo eixo Y com receita (milhares de R$) - eixo Y próprio
+    # pra vendas, via camadas do Altair com resolve_scale independente,
+    # resolve isso sem mexer em nenhum dado.
+    df_serie = pd.DataFrame(serie)
+    cores = {"receita": "#4C78A8", "visitas": "#F58518", "vendas": "#54A24B"}
+
+    base = alt.Chart(df_serie).encode(x=alt.X("data:T", title=None))
+
+    camada_principal = base.transform_fold(
+        ["receita", "visitas"], as_=["metrica", "valor"]
+    ).mark_line().encode(
+        y=alt.Y("valor:Q", title="Receita (R$) / Visitas"),
+        color=alt.Color(
+            "metrica:N",
+            scale=alt.Scale(domain=["receita", "visitas"], range=[cores["receita"], cores["visitas"]]),
+            legend=alt.Legend(title=None),
+        ),
+    )
+    camada_vendas = base.mark_line(color=cores["vendas"]).encode(
+        y=alt.Y("vendas:Q", title="Vendas", axis=alt.Axis(titleColor=cores["vendas"])),
+    )
+
+    grafico = alt.layer(camada_principal, camada_vendas).resolve_scale(y="independent")
+    st.altair_chart(grafico, use_container_width=True)
 else:
     st.info("Sem dados no período selecionado.")
 
