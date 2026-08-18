@@ -119,19 +119,20 @@ if conta_id:
         st.markdown(analise["texto"])
 else:
     # "Todas as contas" ou um canal inteiro - uma narrativa combinada
-    # misturaria o contexto de contas diferentes numa leitura só. Mostra
-    # um bloco por conta em vez de escolher "a mais recente entre todas".
+    # misturaria o contexto de contas diferentes numa leitura só. Seletor
+    # no topo da seção pra escolher qual conta ver, em vez de empilhar
+    # todas (accordion) - mais rápido de ler uma de cada vez.
     contas = obter_contas_ativas(canal)
-    blocos = []
+    blocos = {}
     for conta in contas:
         analise = obter_ultima_analise(conta_id=conta["conta_id"])
         if analise is not None:
-            blocos.append((conta, analise))
+            blocos[f"{conta['nome']} ({conta['conta_id']})"] = analise
 
     if not blocos:
         st.info("Ainda não há nenhuma análise gerada.")
     else:
-        for conta, analise in blocos:
-            with st.expander(f"{conta['nome']} ({conta['conta_id']})", expanded=True):
-                st.caption(f"{analise['data']} (gerada em {analise['gerado_em']})")
-                st.markdown(analise["texto"])
+        escolha = st.selectbox("Conta", list(blocos.keys()), key="visao_geral_analise_conta")
+        analise = blocos[escolha]
+        st.caption(f"{analise['data']} (gerada em {analise['gerado_em']})")
+        st.markdown(analise["texto"])

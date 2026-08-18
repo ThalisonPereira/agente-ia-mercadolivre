@@ -173,17 +173,19 @@ if conta_id:
         st.caption(f"Conta '{analise['conta_id']}' — {analise['data']} (gerada em {analise['gerado_em']})")
         st.markdown(analise["texto"])
 else:
+    # Seletor no topo da seção pra escolher qual conta ver, em vez de
+    # empilhar todas (accordion) - mais rápido de ler uma de cada vez.
     contas = obter_contas_ativas(canal)
-    blocos = []
+    blocos = {}
     for conta in contas:
         analise = obter_ultima_analise_ads(conta_id=conta["conta_id"])
         if analise is not None:
-            blocos.append((conta, analise))
+            blocos[f"{conta['nome']} ({conta['conta_id']})"] = analise
 
     if not blocos:
         st.info("Ainda não há nenhuma análise de publicidade gerada.")
     else:
-        for conta, analise in blocos:
-            with st.expander(f"{conta['nome']} ({conta['conta_id']})", expanded=True):
-                st.caption(f"{analise['data']} (gerada em {analise['gerado_em']})")
-                st.markdown(analise["texto"])
+        escolha = st.selectbox("Conta", list(blocos.keys()), key="publicidade_analise_conta")
+        analise = blocos[escolha]
+        st.caption(f"{analise['data']} (gerada em {analise['gerado_em']})")
+        st.markdown(analise["texto"])
