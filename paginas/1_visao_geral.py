@@ -22,7 +22,7 @@ from paginas._util_filtros import obter_filtros_sidebar
 
 st.title("📊 Visão Geral")
 
-conta_id, canal = obter_filtros_sidebar()
+conta_id, canal = obter_filtros_sidebar("visao_geral")
 
 data_maxima = obter_data_mais_recente(conta_id, canal)
 if data_maxima is None:

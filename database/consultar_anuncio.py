@@ -20,10 +20,11 @@ def buscar_por_sku_ou_titulo(
     canal: str | None = None,
 ) -> list[dict]:
     """
-    Busca o desempenho (visitas/vendas/receita somados) de anúncios cujo SKU
-    ou título contenha TODAS as palavras do termo informado (cada palavra
-    pode aparecer em qualquer ordem/posição - "bancada 120cm" casa com
-    "Bancada Gourmet Ilha ... 120cm", não exige a frase inteira como
+    Busca o desempenho (visitas/vendas/receita somados) de anúncios cujo SKU,
+    item_id (ex: colado direto da URL/painel do Mercado Livre, com ou sem o
+    prefixo "MLB") ou título contenha TODAS as palavras do termo informado
+    (cada palavra pode aparecer em qualquer ordem/posição - "bancada 120cm"
+    casa com "Bancada Gourmet Ilha ... 120cm", não exige a frase inteira como
     substring contínua), num intervalo de datas. Restringe a uma conta
     específica (`conta_id`) ou a um canal inteiro (`canal`) se informado;
     senão, busca em todas as contas.
@@ -40,7 +41,8 @@ def buscar_por_sku_ou_titulo(
         return []
 
     condicoes = " AND ".join(
-        f"(a.sku LIKE :palavra{i} OR a.titulo LIKE :palavra{i})" for i in range(len(palavras))
+        f"(a.sku LIKE :palavra{i} OR a.titulo LIKE :palavra{i} OR a.item_id LIKE :palavra{i})"
+        for i in range(len(palavras))
     )
     parametros = {f"palavra{i}": f"%{palavra}%" for i, palavra in enumerate(palavras)}
 

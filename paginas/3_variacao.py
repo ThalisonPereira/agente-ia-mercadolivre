@@ -15,7 +15,7 @@ from paginas._util_filtros import obter_filtros_sidebar
 
 st.title("📈 Variação")
 
-conta_id, canal = obter_filtros_sidebar()
+conta_id, canal = obter_filtros_sidebar("variacao")
 
 resultado = obter_variacao_anuncios(conta_id=conta_id, canal=canal)
 
