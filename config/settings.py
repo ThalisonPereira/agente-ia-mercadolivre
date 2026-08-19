@@ -139,3 +139,19 @@ def carregar_configuracao_turso() -> TursoConfig:
         database_url=_obter_variavel_obrigatoria("TURSO_DATABASE_URL"),
         auth_token=_obter_variavel_obrigatoria("TURSO_AUTH_TOKEN"),
     )
+
+
+@dataclass(frozen=True)
+class SupabaseConfig:
+    """Connection string direta do Postgres do Supabase - novo banco de dados
+    (substitui o Turso), pra permitir uma interface nova (Lovable) consumir
+    os mesmos dados que o Python já coleta/calcula."""
+
+    database_url: str
+
+
+def carregar_configuracao_supabase() -> SupabaseConfig:
+    """Lê e valida a connection string do Supabase."""
+    return SupabaseConfig(
+        database_url=_obter_variavel_obrigatoria("SUPABASE_DB_URL"),
+    )

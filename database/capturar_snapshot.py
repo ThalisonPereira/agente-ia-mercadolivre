@@ -9,12 +9,12 @@ coletar os dados na API do canal correspondente (Mercado Livre, Shopee...).
 
 from datetime import date, datetime
 
-from database.conexao_turso import obter_conexao
+from database.conexao_supabase import obter_conexao
 from database.esquema import criar_tabelas
 
 UPSERT_ANUNCIO = """
 INSERT INTO anuncios (conta_id, item_id, titulo, sku, atualizado_em)
-VALUES (:conta_id, :item_id, :titulo, :sku, :atualizado_em)
+VALUES (%(conta_id)s, %(item_id)s, %(titulo)s, %(sku)s, %(atualizado_em)s)
 ON CONFLICT(conta_id, item_id) DO UPDATE SET
     titulo = excluded.titulo,
     sku = excluded.sku,
@@ -25,7 +25,7 @@ UPSERT_SNAPSHOT = """
 INSERT INTO historico_anuncios_diario (
     conta_id, item_id, data_snapshot, visitas, vendas_quantidade, receita, capturado_em
 )
-VALUES (:conta_id, :item_id, :data_snapshot, :visitas, :vendas_quantidade, :receita, :capturado_em)
+VALUES (%(conta_id)s, %(item_id)s, %(data_snapshot)s, %(visitas)s, %(vendas_quantidade)s, %(receita)s, %(capturado_em)s)
 ON CONFLICT(conta_id, item_id, data_snapshot) DO UPDATE SET
     visitas = excluded.visitas,
     vendas_quantidade = excluded.vendas_quantidade,

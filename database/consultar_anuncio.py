@@ -9,7 +9,7 @@ linha por dia, pra manter a resposta compacta.
 
 from datetime import date, timedelta
 
-from database.conexao_turso import obter_conexao
+from database.conexao_supabase import obter_conexao
 
 
 def buscar_por_sku_ou_titulo(
@@ -40,17 +40,20 @@ def buscar_por_sku_ou_titulo(
     if not palavras:
         return []
 
+    # ILIKE (não LIKE) - o SQLite/Turso é case-insensitive por padrão pra
+    # LIKE ASCII, o Postgres não é; ILIKE preserva o comportamento que a
+    # busca já tinha (achar "bancada" buscando "Bancada").
     condicoes = " AND ".join(
-        f"(a.sku LIKE :palavra{i} OR a.titulo LIKE :palavra{i} OR a.item_id LIKE :palavra{i})"
+        f"(a.sku ILIKE %(palavra{i})s OR a.titulo ILIKE %(palavra{i})s OR a.item_id ILIKE %(palavra{i})s)"
         for i in range(len(palavras))
     )
     parametros = {f"palavra{i}": f"%{palavra}%" for i, palavra in enumerate(palavras)}
 
     filtros_extra = ""
     if conta_id:
-        filtros_extra += " AND h.conta_id = :conta_id"
+        filtros_extra += " AND h.conta_id = %(conta_id)s"
     if canal:
-        filtros_extra += " AND c.canal = :canal"
+        filtros_extra += " AND c.canal = %(canal)s"
 
     sql = f"""
         SELECT
@@ -67,8 +70,8 @@ def buscar_por_sku_ou_titulo(
         JOIN anuncios a ON a.conta_id = h.conta_id AND a.item_id = h.item_id
         LEFT JOIN contas c ON c.conta_id = h.conta_id
         WHERE {condicoes}
-          AND h.data_snapshot >= :data_inicio
-          AND h.data_snapshot <= :data_fim
+          AND h.data_snapshot >= %(data_inicio)s
+          AND h.data_snapshot <= %(data_fim)s
           {filtros_extra}
         GROUP BY h.conta_id, a.item_id, a.titulo, a.sku
         ORDER BY total_receita DESC
@@ -80,10 +83,10 @@ def buscar_por_sku_ou_titulo(
             filtros_data_maxima = ""
             parametros_data_maxima = {}
             if conta_id:
-                filtros_data_maxima += " AND h.conta_id = :conta_id"
+                filtros_data_maxima += " AND h.conta_id = %(conta_id)s"
                 parametros_data_maxima["conta_id"] = conta_id
             if canal:
-                filtros_data_maxima += " AND c.canal = :canal"
+                filtros_data_maxima += " AND c.canal = %(canal)s"
                 parametros_data_maxima["canal"] = canal
             linha = conexao.execute(
                 f"""

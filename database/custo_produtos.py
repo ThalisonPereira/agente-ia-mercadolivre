@@ -8,12 +8,12 @@ Não é multi-conta: o Bling é uma credencial única (ver integrations/bling.py
 
 from datetime import datetime
 
-from database.conexao_turso import obter_conexao
+from database.conexao_supabase import obter_conexao
 from database.esquema import criar_tabelas
 
 UPSERT_CUSTO = """
 INSERT INTO custo_produtos (sku, produto_id_bling, nome, preco_custo, atualizado_em)
-VALUES (:sku, :produto_id_bling, :nome, :preco_custo, :atualizado_em)
+VALUES (%(sku)s, %(produto_id_bling)s, %(nome)s, %(preco_custo)s, %(atualizado_em)s)
 ON CONFLICT(sku) DO UPDATE SET
     produto_id_bling = excluded.produto_id_bling,
     nome = excluded.nome,
@@ -70,7 +70,7 @@ def obter_custo(sku: str) -> float | None:
     conexao = obter_conexao()
     try:
         linha = conexao.execute(
-            "SELECT preco_custo FROM custo_produtos WHERE sku = :sku", {"sku": sku}
+            "SELECT preco_custo FROM custo_produtos WHERE sku = %(sku)s", {"sku": sku}
         ).fetchone()
     finally:
         conexao.close()

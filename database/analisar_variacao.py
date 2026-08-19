@@ -8,7 +8,7 @@ ou combinar todas as contas (o join sempre casa por conta_id + item_id, pra
 nunca misturar anúncios de contas/canais diferentes que tenham o mesmo id).
 """
 
-from database.conexao_turso import obter_conexao
+from database.conexao_supabase import obter_conexao
 from database.contas import obter_contas_ativas
 from database.kpis import obter_data_mais_recente as _obter_data_mais_recente_conta
 
@@ -27,13 +27,13 @@ FROM historico_anuncios_diario h_novo
 JOIN historico_anuncios_diario h_antigo
     ON h_antigo.conta_id = h_novo.conta_id
     AND h_antigo.item_id = h_novo.item_id
-    AND h_antigo.data_snapshot = :data_inicial
+    AND h_antigo.data_snapshot = %(data_inicial)s
 LEFT JOIN anuncios a
     ON a.conta_id = h_novo.conta_id
     AND a.item_id = h_novo.item_id
 LEFT JOIN contas c
     ON c.conta_id = h_novo.conta_id
-WHERE h_novo.data_snapshot = :data_final
+WHERE h_novo.data_snapshot = %(data_final)s
 """
 
 # Variação percentual (para cima ou para baixo) a partir da qual um anúncio
@@ -63,10 +63,10 @@ def _obter_duas_datas_mais_recentes(
     parametros = {}
     filtros = []
     if conta_id:
-        filtros.append("h.conta_id = :conta_id")
+        filtros.append("h.conta_id = %(conta_id)s")
         parametros["conta_id"] = conta_id
     if canal:
-        filtros.append("c.canal = :canal")
+        filtros.append("c.canal = %(canal)s")
         parametros["canal"] = canal
     if filtros:
         sql += " WHERE " + " AND ".join(filtros)
@@ -126,10 +126,10 @@ def obter_variacao_anuncios(
     sql = QUERY_COMPARACAO
     parametros = {"data_inicial": data_inicial, "data_final": data_final}
     if conta_id:
-        sql += " AND h_novo.conta_id = :conta_id"
+        sql += " AND h_novo.conta_id = %(conta_id)s"
         parametros["conta_id"] = conta_id
     if canal:
-        sql += " AND c.canal = :canal"
+        sql += " AND c.canal = %(canal)s"
         parametros["canal"] = canal
 
     conexao = obter_conexao()

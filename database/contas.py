@@ -9,12 +9,12 @@ múltiplos canais (Mercado Livre, Shopee, Amazon...).
 
 from datetime import datetime
 
-from database.conexao_turso import obter_conexao
+from database.conexao_supabase import obter_conexao
 from database.esquema import criar_tabelas
 
 UPSERT_CONTA = """
 INSERT INTO contas (conta_id, canal, nome, ativo, criado_em)
-VALUES (:conta_id, :canal, :nome, :ativo, :criado_em)
+VALUES (%(conta_id)s, %(canal)s, %(nome)s, %(ativo)s, %(criado_em)s)
 ON CONFLICT(conta_id) DO UPDATE SET
     canal = excluded.canal,
     nome = excluded.nome,
@@ -44,7 +44,7 @@ def obter_contas_ativas(canal: str | None = None) -> list[dict]:
     sql = "SELECT conta_id, canal, nome FROM contas WHERE ativo = 1"
     parametros = {}
     if canal:
-        sql += " AND canal = :canal"
+        sql += " AND canal = %(canal)s"
         parametros["canal"] = canal
 
     conexao = obter_conexao()

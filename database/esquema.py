@@ -8,7 +8,7 @@ suportar múltiplas contas do Mercado Livre e, no futuro, outros canais
 (Shopee, Amazon).
 """
 
-from database.conexao_turso import obter_conexao
+from database.conexao_supabase import obter_conexao
 
 CRIAR_TABELA_CONTAS = """
 CREATE TABLE IF NOT EXISTS contas (
@@ -201,13 +201,8 @@ CREATE TABLE IF NOT EXISTS analises_ads_diarias (
 # dela ser criada. "CREATE TABLE IF NOT EXISTS" não altera tabela já
 # existente, por isso precisa desse passo à parte. Cada entrada é
 # (tabela, coluna, definição) - só tenta o ALTER se a coluna ainda não
-# existir (checado via PRAGMA table_info antes). Importante: NÃO dá pra
-# só tentar o ALTER e capturar o erro de "coluna já existe" - o cliente
-# HTTP do Turso (libsql_client) quebra com KeyError genérico nesse caso
-# específico (a API do Turso responde HTTP 200 com o erro dentro do corpo,
-# em vez de um status de erro; a lib só olha o status HTTP e tenta ler um
-# campo que não existe na resposta de erro) - então o ALTER redundante
-# derrubava toda escrita no banco (criar_tabelas roda em quase todo save).
+# existir (checado via information_schema.columns antes, equivalente ao
+# PRAGMA table_info do SQLite/Turso - Postgres não tem PRAGMA).
 _MIGRACOES_COLUNA = [
     ("itens_venda", "status", "TEXT DEFAULT 'pago'"),
     # Custo unitário do produto (Bling) capturado no MOMENTO da coleta, não
@@ -221,7 +216,11 @@ _MIGRACOES_COLUNA = [
 def _aplicar_migracoes(conexao) -> None:
     for tabela, coluna, definicao in _MIGRACOES_COLUNA:
         colunas_existentes = {
-            linha["name"] for linha in conexao.execute(f"PRAGMA table_info({tabela})").fetchall()
+            linha["column_name"]
+            for linha in conexao.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = %(tabela)s",
+                {"tabela": tabela},
+            ).fetchall()
         }
         if coluna not in colunas_existentes:
             conexao.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {definicao}")

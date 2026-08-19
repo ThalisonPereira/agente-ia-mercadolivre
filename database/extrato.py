@@ -19,7 +19,7 @@ sua própria data_venda gravada.
 
 from datetime import date, datetime
 
-from database.conexao_turso import obter_conexao
+from database.conexao_supabase import obter_conexao
 from database.custo_produtos import obter_custo
 from database.esquema import criar_tabelas
 
@@ -35,9 +35,9 @@ INSERT INTO itens_venda (
     custo_unitario_capturado, capturado_em
 )
 VALUES (
-    :conta_id, :pedido_id, :item_id, :sku, :titulo, :data_venda,
-    :quantidade, :preco_venda, :comissao_ml, :frete_vendedor, :status,
-    :custo_unitario_capturado, :capturado_em
+    %(conta_id)s, %(pedido_id)s, %(item_id)s, %(sku)s, %(titulo)s, %(data_venda)s,
+    %(quantidade)s, %(preco_venda)s, %(comissao_ml)s, %(frete_vendedor)s, %(status)s,
+    %(custo_unitario_capturado)s, %(capturado_em)s
 )
 ON CONFLICT(conta_id, pedido_id, item_id) DO UPDATE SET
     sku = excluded.sku,
@@ -57,10 +57,10 @@ def _filtros(conta_id: str | None, canal: str | None) -> tuple[str, dict]:
     parametros: dict = {}
     filtros_extra = ""
     if conta_id:
-        filtros_extra += " AND v.conta_id = :conta_id"
+        filtros_extra += " AND v.conta_id = %(conta_id)s"
         parametros["conta_id"] = conta_id
     if canal:
-        filtros_extra += " AND c.canal = :canal"
+        filtros_extra += " AND c.canal = %(canal)s"
         parametros["canal"] = canal
     return filtros_extra, parametros
 
@@ -213,7 +213,7 @@ def obter_extrato(
                v.custo_unitario_capturado
         FROM itens_venda v
         LEFT JOIN contas c ON c.conta_id = v.conta_id
-        WHERE v.data_venda BETWEEN :data_inicio AND :data_fim {filtros_extra}
+        WHERE v.data_venda BETWEEN %(data_inicio)s AND %(data_fim)s {filtros_extra}
         ORDER BY v.data_venda DESC, v.preco_venda DESC
     """
     conexao = obter_conexao()

@@ -18,9 +18,16 @@ anthropic>=0.120.0
 # Interface web do chat de IA (chat_app.py), hospedável de graça no Streamlit Community Cloud
 streamlit>=1.38.0
 
-# Cliente do banco de dados hospedado (Turso/libSQL) - fala o protocolo Hrana via
-# HTTP/websocket puro Python, sem precisar compilar extensão nativa (o pacote
-# alternativo `libsql` requer toolchain Rust e não tem wheel pra todas as plataformas)
+# Cliente do banco de dados hospedado atual (Supabase/Postgres) -
+# database/conexao_supabase.py, fonte de verdade dos dados.
+psycopg2-binary>=2.9.9
+
+# Cliente do Turso/libSQL - banco anterior à migração pro Supabase, mantido
+# só como caminho de rollback (database/conexao_turso.py) e pelos scripts
+# de migração de uso único (scripts/migrar_para_*.py). Fala o protocolo
+# Hrana via HTTP/websocket puro Python, sem precisar compilar extensão
+# nativa (o pacote alternativo `libsql` requer toolchain Rust e não tem
+# wheel pra todas as plataformas).
 libsql-client>=0.3.1
 
 # Dados de fuso horário (IANA) pro zoneinfo - usado em agents/assistente_ia.py

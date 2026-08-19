@@ -6,7 +6,7 @@ e as páginas de KPIs/ranking/variação/consulta num só app, hospedado de
 graça no Streamlit Community Cloud. Substitui chat_app.py como main file
 do deploy.
 
-Credenciais (Anthropic, Turso) vêm de st.secrets, não do .env - porque,
+Credenciais (Anthropic, Supabase) vêm de st.secrets, não do .env - porque,
 hospedado na nuvem, o app não tem acesso ao .env local (ver
 .streamlit/secrets.toml.example). Espelhadas em os.environ aqui, uma
 única vez, ANTES de importar qualquer coisa de database/*.py ou
@@ -31,7 +31,7 @@ import streamlit as st
 
 from paginas._util_auth import exigir_login
 
-for _chave in ("ANTHROPIC_API_KEY", "TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"):
+for _chave in ("ANTHROPIC_API_KEY", "SUPABASE_DB_URL"):
     if _chave in st.secrets:
         os.environ.setdefault(_chave, st.secrets[_chave])
 

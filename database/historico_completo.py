@@ -11,7 +11,7 @@ escala). O chat atual (agents/assistente_ia.py) consulta o banco de dados
 direto, com ferramentas que buscam só o pedaço de dado necessário.
 """
 
-from database.conexao_turso import obter_conexao
+from database.conexao_supabase import obter_conexao
 
 
 def obter_datas_existentes(conta_id: str) -> set[str]:
@@ -19,7 +19,7 @@ def obter_datas_existentes(conta_id: str) -> set[str]:
     conexao = obter_conexao()
     try:
         linhas = conexao.execute(
-            "SELECT DISTINCT data_snapshot FROM historico_anuncios_diario WHERE conta_id = :conta_id",
+            "SELECT DISTINCT data_snapshot FROM historico_anuncios_diario WHERE conta_id = %(conta_id)s",
             {"conta_id": conta_id},
         ).fetchall()
     finally:

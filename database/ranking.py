@@ -6,7 +6,7 @@ intervalo de datas. Usado pela ferramenta ranking_periodo do assistente de
 IA (agents/assistente_ia.py).
 """
 
-from database.conexao_turso import obter_conexao
+from database.conexao_supabase import obter_conexao
 
 # Whitelist fixa de expressões SQL válidas por métrica - nunca interpolar a
 # métrica recebida diretamente na query (ela vem de uma ferramenta que o
@@ -40,10 +40,10 @@ def obter_ranking(
 
     filtros_extra = ""
     if conta_id:
-        filtros_extra += " AND h.conta_id = :conta_id"
+        filtros_extra += " AND h.conta_id = %(conta_id)s"
         parametros["conta_id"] = conta_id
     if canal:
-        filtros_extra += " AND c.canal = :canal"
+        filtros_extra += " AND c.canal = %(canal)s"
         parametros["canal"] = canal
 
     sql = f"""
@@ -58,11 +58,11 @@ def obter_ranking(
         FROM historico_anuncios_diario h
         JOIN anuncios a ON a.conta_id = h.conta_id AND a.item_id = h.item_id
         LEFT JOIN contas c ON c.conta_id = h.conta_id
-        WHERE h.data_snapshot >= :data_inicio AND h.data_snapshot <= :data_fim
+        WHERE h.data_snapshot >= %(data_inicio)s AND h.data_snapshot <= %(data_fim)s
         {filtros_extra}
         GROUP BY h.conta_id, a.item_id, a.titulo, a.sku
         ORDER BY {expressao_ordenacao} DESC
-        LIMIT :top_n
+        LIMIT %(top_n)s
     """
 
     conexao = obter_conexao()

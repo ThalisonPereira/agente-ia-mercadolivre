@@ -17,7 +17,7 @@ recente), nunca uma soma de status ao longo de um período.
 
 from datetime import date, datetime
 
-from database.conexao_turso import obter_conexao
+from database.conexao_supabase import obter_conexao
 from database.contas import obter_contas_ativas
 from database.esquema import criar_tabelas
 
@@ -25,7 +25,7 @@ UPSERT_PEDIDO = """
 INSERT INTO pedidos (
     conta_id, pedido_id, data_pedido, status_envio, substatus_envio, logistic_type, valor_total, capturado_em
 )
-VALUES (:conta_id, :pedido_id, :data_pedido, :status_envio, :substatus_envio, :logistic_type, :valor_total, :capturado_em)
+VALUES (%(conta_id)s, %(pedido_id)s, %(data_pedido)s, %(status_envio)s, %(substatus_envio)s, %(logistic_type)s, %(valor_total)s, %(capturado_em)s)
 ON CONFLICT(conta_id, pedido_id) DO UPDATE SET
     data_pedido = excluded.data_pedido,
     status_envio = excluded.status_envio,
@@ -57,10 +57,10 @@ def _filtros(conta_id: str | None, canal: str | None) -> tuple[str, dict]:
     parametros: dict = {}
     filtros_extra = ""
     if conta_id:
-        filtros_extra += " AND p.conta_id = :conta_id"
+        filtros_extra += " AND p.conta_id = %(conta_id)s"
         parametros["conta_id"] = conta_id
     if canal:
-        filtros_extra += " AND c.canal = :canal"
+        filtros_extra += " AND c.canal = %(canal)s"
         parametros["canal"] = canal
     return filtros_extra, parametros
 
@@ -141,7 +141,7 @@ def obter_resumo(data: str, conta_id: str | None = None, canal: str | None = Non
         SELECT p.status_envio, p.valor_total
         FROM pedidos p
         LEFT JOIN contas c ON c.conta_id = p.conta_id
-        WHERE p.data_pedido = :data {filtros_extra}
+        WHERE p.data_pedido = %(data)s {filtros_extra}
     """
     conexao = obter_conexao()
     try:
@@ -165,7 +165,7 @@ def obter_pedidos(data: str, conta_id: str | None = None, canal: str | None = No
         SELECT p.conta_id, p.pedido_id, p.status_envio, p.substatus_envio, p.logistic_type, p.valor_total
         FROM pedidos p
         LEFT JOIN contas c ON c.conta_id = p.conta_id
-        WHERE p.data_pedido = :data {filtros_extra}
+        WHERE p.data_pedido = %(data)s {filtros_extra}
         ORDER BY p.valor_total DESC
     """
     conexao = obter_conexao()

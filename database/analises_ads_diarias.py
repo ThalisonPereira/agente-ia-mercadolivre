@@ -10,12 +10,12 @@ orgânicas).
 
 from datetime import datetime
 
-from database.conexao_turso import obter_conexao
+from database.conexao_supabase import obter_conexao
 from database.esquema import criar_tabelas
 
 UPSERT_ANALISE = """
 INSERT INTO analises_ads_diarias (conta_id, data, texto, gerado_em)
-VALUES (:conta_id, :data, :texto, :gerado_em)
+VALUES (%(conta_id)s, %(data)s, %(texto)s, %(gerado_em)s)
 ON CONFLICT(conta_id, data) DO UPDATE SET
     texto = excluded.texto,
     gerado_em = excluded.gerado_em;
@@ -24,7 +24,7 @@ ON CONFLICT(conta_id, data) DO UPDATE SET
 QUERY_ULTIMA_ANALISE = """
 SELECT conta_id, data, texto, gerado_em
 FROM analises_ads_diarias
-WHERE conta_id = :conta_id
+WHERE conta_id = %(conta_id)s
 ORDER BY data DESC
 LIMIT 1
 """
@@ -40,7 +40,7 @@ QUERY_ULTIMA_ANALISE_POR_CANAL = """
 SELECT a.conta_id, a.data, a.texto, a.gerado_em
 FROM analises_ads_diarias a
 JOIN contas c ON c.conta_id = a.conta_id
-WHERE c.canal = :canal
+WHERE c.canal = %(canal)s
 ORDER BY a.data DESC, a.gerado_em DESC
 LIMIT 1
 """

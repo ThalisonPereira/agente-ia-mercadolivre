@@ -8,17 +8,17 @@ seletor de período). Segue o mesmo padrão de LEFT JOIN contas com filtro
 opcional por conta_id/canal usado em database/ranking.py.
 """
 
-from database.conexao_turso import obter_conexao
+from database.conexao_supabase import obter_conexao
 
 
 def _filtros(conta_id: str | None, canal: str | None) -> tuple[str, dict]:
     parametros: dict = {}
     filtros_extra = ""
     if conta_id:
-        filtros_extra += " AND h.conta_id = :conta_id"
+        filtros_extra += " AND h.conta_id = %(conta_id)s"
         parametros["conta_id"] = conta_id
     if canal:
-        filtros_extra += " AND c.canal = :canal"
+        filtros_extra += " AND c.canal = %(canal)s"
         parametros["canal"] = canal
     return filtros_extra, parametros
 
@@ -41,7 +41,7 @@ def obter_totais_periodo(
             COALESCE(SUM(h.receita), 0) AS total_receita
         FROM historico_anuncios_diario h
         LEFT JOIN contas c ON c.conta_id = h.conta_id
-        WHERE h.data_snapshot >= :data_inicio AND h.data_snapshot <= :data_fim
+        WHERE h.data_snapshot >= %(data_inicio)s AND h.data_snapshot <= %(data_fim)s
         {filtros_extra}
     """
     conexao = obter_conexao()
@@ -76,7 +76,7 @@ def obter_serie_diaria(
             COALESCE(SUM(h.receita), 0) AS total_receita
         FROM historico_anuncios_diario h
         LEFT JOIN contas c ON c.conta_id = h.conta_id
-        WHERE h.data_snapshot >= :data_inicio AND h.data_snapshot <= :data_fim
+        WHERE h.data_snapshot >= %(data_inicio)s AND h.data_snapshot <= %(data_fim)s
         {filtros_extra}
         GROUP BY h.data_snapshot
         ORDER BY h.data_snapshot ASC

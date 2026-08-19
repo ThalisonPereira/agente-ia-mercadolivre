@@ -12,7 +12,7 @@ a média dos percentuais diários.
 
 from datetime import date, datetime
 
-from database.conexao_turso import obter_conexao
+from database.conexao_supabase import obter_conexao
 from database.esquema import criar_tabelas
 
 UPSERT_CAMPANHA = """
@@ -23,10 +23,10 @@ INSERT INTO ads_campanhas_diario (
     direct_units_quantity, indirect_units_quantity, units_quantity, capturado_em
 )
 VALUES (
-    :conta_id, :campaign_id, :data, :nome, :status, :strategy, :budget, :acos_target, :roas_target,
-    :clicks, :prints, :cost, :cpc, :ctr, :acos, :cvr, :roas,
-    :direct_amount, :indirect_amount, :total_amount,
-    :direct_units_quantity, :indirect_units_quantity, :units_quantity, :capturado_em
+    %(conta_id)s, %(campaign_id)s, %(data)s, %(nome)s, %(status)s, %(strategy)s, %(budget)s, %(acos_target)s, %(roas_target)s,
+    %(clicks)s, %(prints)s, %(cost)s, %(cpc)s, %(ctr)s, %(acos)s, %(cvr)s, %(roas)s,
+    %(direct_amount)s, %(indirect_amount)s, %(total_amount)s,
+    %(direct_units_quantity)s, %(indirect_units_quantity)s, %(units_quantity)s, %(capturado_em)s
 )
 ON CONFLICT(conta_id, campaign_id, data) DO UPDATE SET
     nome = excluded.nome, status = excluded.status, strategy = excluded.strategy,
@@ -46,9 +46,9 @@ INSERT INTO ads_anuncios_diario (
     units_quantity, capturado_em
 )
 VALUES (
-    :conta_id, :item_id, :campaign_id, :data, :titulo, :status,
-    :clicks, :prints, :cost, :cpc, :acos, :direct_amount, :indirect_amount, :total_amount,
-    :units_quantity, :capturado_em
+    %(conta_id)s, %(item_id)s, %(campaign_id)s, %(data)s, %(titulo)s, %(status)s,
+    %(clicks)s, %(prints)s, %(cost)s, %(cpc)s, %(acos)s, %(direct_amount)s, %(indirect_amount)s, %(total_amount)s,
+    %(units_quantity)s, %(capturado_em)s
 )
 ON CONFLICT(conta_id, item_id, data) DO UPDATE SET
     campaign_id = excluded.campaign_id, titulo = excluded.titulo, status = excluded.status,
@@ -63,10 +63,10 @@ def _filtros(alias: str, conta_id: str | None, canal: str | None) -> tuple[str, 
     parametros: dict = {}
     filtros_extra = ""
     if conta_id:
-        filtros_extra += f" AND {alias}.conta_id = :conta_id"
+        filtros_extra += f" AND {alias}.conta_id = %(conta_id)s"
         parametros["conta_id"] = conta_id
     if canal:
-        filtros_extra += " AND c.canal = :canal"
+        filtros_extra += " AND c.canal = %(canal)s"
         parametros["canal"] = canal
     return filtros_extra, parametros
 
@@ -201,7 +201,7 @@ def obter_resumo(data_inicio: str, data_fim: str, conta_id: str | None = None, c
             COALESCE(SUM(a.units_quantity), 0) AS units_quantity
         FROM ads_campanhas_diario a
         LEFT JOIN contas c ON c.conta_id = a.conta_id
-        WHERE a.data BETWEEN :data_inicio AND :data_fim {filtros_extra}
+        WHERE a.data BETWEEN %(data_inicio)s AND %(data_fim)s {filtros_extra}
     """
     conexao = obter_conexao()
     try:
@@ -241,7 +241,7 @@ def obter_campanhas(
             COALESCE(SUM(a.units_quantity), 0) AS units_quantity
         FROM ads_campanhas_diario a
         LEFT JOIN contas c ON c.conta_id = a.conta_id
-        WHERE a.data BETWEEN :data_inicio AND :data_fim {filtros_extra}
+        WHERE a.data BETWEEN %(data_inicio)s AND %(data_fim)s {filtros_extra}
         GROUP BY a.conta_id, a.campaign_id
         ORDER BY cost DESC
     """
@@ -294,10 +294,10 @@ def obter_anuncios(
             COALESCE(SUM(a.units_quantity), 0) AS units_quantity
         FROM ads_anuncios_diario a
         LEFT JOIN contas c ON c.conta_id = a.conta_id
-        WHERE a.data BETWEEN :data_inicio AND :data_fim {filtros_extra}
+        WHERE a.data BETWEEN %(data_inicio)s AND %(data_fim)s {filtros_extra}
         GROUP BY a.conta_id, a.item_id
         ORDER BY cost DESC
-        LIMIT :top_n
+        LIMIT %(top_n)s
     """
     conexao = obter_conexao()
     try:
