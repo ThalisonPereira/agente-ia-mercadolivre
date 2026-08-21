@@ -59,6 +59,17 @@ class MercadoLivreCanal:
     def __init__(self, conta_id: str):
         self.conta_id = conta_id
         self._config: MercadoLivreConfig = carregar_configuracao_ml(conta_id)
+        # Cache do token em memória, pra não abrir uma conexão nova com o
+        # banco a cada chamada de API (ver _token_valido) - importante em
+        # coletas com muitas chamadas seguidas (ex: backfill de vários dias),
+        # onde consultar o banco por item esgotava as conexões do pooler.
+        self._tokens_cache: dict | None = None
+        # Sessão HTTP reaproveitada entre chamadas (keep-alive) - sem isso,
+        # cada requisição abre uma conexão TCP/TLS nova, o que degrada
+        # visivelmente ao longo de uma coleta com centenas de chamadas
+        # seguidas (ex: visitas por item numa conta com muitos anúncios),
+        # deixando dezenas de conexões em TIME_WAIT e piorando a cada request.
+        self._sessao = requests.Session()
 
     # ------------------------------------------------------------------
     # Fluxo de autorização OAuth2 (equivalente ao antigo ml_auth.py)
@@ -195,8 +206,14 @@ class MercadoLivreCanal:
         return novos_tokens
 
     def _token_valido(self) -> str:
-        """Ponto único de acesso a um access_token garantidamente válido pra essa conta."""
-        tokens = obter_token(self.conta_id)
+        """
+        Ponto único de acesso a um access_token garantidamente válido pra
+        essa conta. Usa um cache em memória (self._tokens_cache) pra evitar
+        consultar o banco a cada chamada de API - só busca no banco na
+        primeira vez, e só grava de novo quando o token é efetivamente
+        renovado.
+        """
+        tokens = self._tokens_cache or obter_token(self.conta_id)
 
         if not tokens:
             raise RuntimeError(
@@ -209,6 +226,7 @@ class MercadoLivreCanal:
             tokens = self._renovar_tokens(tokens["refresh_token"])
             print("Token renovado com sucesso.")
 
+        self._tokens_cache = tokens
         return tokens["access_token"]
 
     def obter_id_vendedor(self) -> str:
@@ -241,7 +259,7 @@ class MercadoLivreCanal:
         """
         headers = {**self._cabecalho(), **(headers_extra or {})}
         for tentativa in range(MAX_TENTATIVAS_RATE_LIMIT):
-            resposta = requests.get(url, headers=headers, params=params, timeout=timeout)
+            resposta = self._sessao.get(url, headers=headers, params=params, timeout=timeout)
             if resposta.status_code != 429 and resposta.status_code < 500:
                 return resposta
 
@@ -582,7 +600,7 @@ class MercadoLivreCanal:
         contas futuras sem esse produto habilitado sem quebrar a rotina).
         """
         headers = {**self._cabecalho(), "Api-Version": "1"}
-        resposta = requests.get(
+        resposta = self._sessao.get(
             f"{BASE_URL}/advertising/advertisers", headers=headers, params={"product_id": "PADS"}, timeout=15
         )
         if resposta.status_code != 200:
