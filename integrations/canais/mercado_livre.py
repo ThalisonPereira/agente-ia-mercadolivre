@@ -171,9 +171,18 @@ class MercadoLivreCanal:
         print(f"[conta: {self.conta_id}] Permissão de Advertising liberada.")
         print(f"Advertiser(s) encontrado(s): {advertisers}")
 
-    def _salvar_tokens(self, tokens: dict) -> None:
-        """Salva os tokens no banco, incluindo o horário em que foram obtidos."""
-        salvar_token(self.conta_id, {**tokens, "obtido_em": time.time()})
+    def _salvar_tokens(self, tokens: dict) -> dict:
+        """
+        Salva os tokens no banco, incluindo o horário em que foram obtidos,
+        e devolve o dicionário enriquecido (com 'obtido_em') - importante
+        pra quem chama poder cachear esse mesmo valor em memória (ver
+        _token_valido) sem herdar um dict sem 'obtido_em', que faria
+        _token_expirado achar que o token acabou de nascer expirado e
+        entrar num loop infinito de renovação.
+        """
+        tokens_completos = {**tokens, "obtido_em": time.time()}
+        salvar_token(self.conta_id, tokens_completos)
+        return tokens_completos
 
     def _token_expirado(self, tokens: dict) -> bool:
         obtido_em = tokens.get("obtido_em", 0)
@@ -202,8 +211,7 @@ class MercadoLivreCanal:
             raise RuntimeError(f"Falha ao renovar o token (status {resposta.status_code}): {resposta.text}")
 
         novos_tokens = resposta.json()
-        self._salvar_tokens(novos_tokens)
-        return novos_tokens
+        return self._salvar_tokens(novos_tokens)
 
     def _token_valido(self) -> str:
         """
