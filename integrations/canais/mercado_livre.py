@@ -13,7 +13,7 @@ quanto numa futura automação rodando na nuvem).
 
 import secrets
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import requests
@@ -39,13 +39,24 @@ MAX_TENTATIVAS_RATE_LIMIT = 5
 # expiração.
 MARGEM_SEGURANCA_SEGUNDOS = 60
 
-# Fuso usado pelo Mercado Livre no campo date_created dos pedidos desse site
-# (MLB) - confirmado empiricamente (7 pedidos reais checados, todos com
-# offset "-04:00", inclusive fora do horário de verão). Usar "-00:00" (UTC)
-# aqui causava um bug real: pedidos das 21h-23h59 (nesse fuso) do dia D
-# apareciam na janela de coleta do dia D+1, porque a diferença de 4h
-# empurrava o timestamp UTC pro dia seguinte.
-FUSO_DATE_CREATED_PEDIDOS = "-04:00"
+# Fuso usado pra decidir a QUAL DIA CALENDÁRIO um pedido pertence (janela de
+# coleta). É o fuso real de Brasília (-03:00, sem horário de verão desde
+# 2019) - o mesmo que o vendedor vê no painel do Mercado Livre.
+#
+# Importante: o campo date_created que a API devolve vem sempre com offset
+# "-04:00" (confirmado empiricamente, 7 pedidos reais checados, inclusive
+# fora do período em que existia horário de verão) - isso NÃO é o fuso civil
+# de Brasília, é só como a API serializa o timestamp. Usar esse "-04:00"
+# como limite de dia (como este código fazia antes) causa um bug real: um
+# pedido das 23h-23h59 em -04:00 (ou seja, 00h-00h59 em Brasília, -03:00) é
+# classificado no dia ANTERIOR ao que o vendedor vê no próprio painel do ML -
+# foi exatamente isso que causou uma venda das 00:10 (Brasília) sumir do dia
+# certo no extrato. Usar "-00:00" (UTC) tem o problema oposto: pedidos das
+# 21h-23h59 em Brasília aparecem no dia seguinte, porque a diferença de 3h
+# empurra o timestamp UTC pro dia seguinte. "-03:00" é o único fuso que bate
+# com o que o vendedor realmente vê como "hoje" no Mercado Livre.
+FUSO_DATE_CREATED_PEDIDOS = "-03:00"
+FUSO_BRASILIA = timezone(timedelta(hours=-3))
 
 
 def _em_lotes(itens: list, tamanho: int = TAMANHO_LOTE):
@@ -375,6 +386,37 @@ class MercadoLivreCanal:
 
         return pedidos
 
+    def _pedidos_do_dia_brasilia(
+        self, seller_id: str, dia: date, status: str | None = "paid"
+    ) -> list[dict]:
+        """
+        Busca os pedidos de um dia calendário completo, no fuso real de
+        Brasília (-03:00) - a mesma referência que o vendedor vê no painel
+        do Mercado Livre.
+
+        O filtro order.date_created.from/to da API não é preciso no limite
+        exato do dia (confirmado ao vivo: um pedido das 23h59 pode aparecer
+        tanto na busca do dia D quanto na do dia D+1) - por isso a janela
+        pedida à API é alargada em 1h pra cada lado (nunca perde pedido por
+        arredondamento da API) e o resultado é refiltrado aqui em Python,
+        comparando o date_created de cada pedido (com precisão de segundo,
+        convertido pro fuso de Brasília) contra 'dia' - assim cada pedido
+        conta uma vez só, no dia certo, não importa a imprecisão da API.
+        """
+        de = f"{dia.isoformat()}T00:00:00.000{FUSO_DATE_CREATED_PEDIDOS}"
+        ate = f"{(dia + timedelta(days=1)).isoformat()}T01:00:00.000{FUSO_DATE_CREATED_PEDIDOS}"
+        pedidos = self._obter_pedidos_periodo(seller_id, de, ate, status=status)
+        return [p for p in pedidos if self._data_criacao_em_brasilia(p) == dia]
+
+    @staticmethod
+    def _data_criacao_em_brasilia(pedido: dict) -> date | None:
+        """Data (calendário de Brasília, -03:00) em que um pedido foi criado, a partir de date_created."""
+        bruto = pedido.get("date_created")
+        if not bruto:
+            return None
+        instante = datetime.fromisoformat(bruto)
+        return (instante.astimezone(FUSO_BRASILIA)).date()
+
     def _obter_status_envio(self, shipping_id: int) -> dict:
         """
         GET /shipments/{id} - o /orders/search só devolve o id do envio, não
@@ -419,11 +461,9 @@ class MercadoLivreCanal:
 
         visitas_data_de = dia.isoformat()
         visitas_data_ate = (dia + timedelta(days=1)).isoformat()
-        pedidos_data_de = f"{dia.isoformat()}T00:00:00.000{FUSO_DATE_CREATED_PEDIDOS}"
-        pedidos_data_ate = f"{dia.isoformat()}T23:59:59.000{FUSO_DATE_CREATED_PEDIDOS}"
 
         visitas_por_item = self._obter_visitas_itens(item_ids, visitas_data_de, visitas_data_ate)
-        pedidos = self._obter_pedidos_periodo(seller_id, pedidos_data_de, pedidos_data_ate)
+        pedidos = self._pedidos_do_dia_brasilia(seller_id, dia)
 
         vendas_por_item: dict[str, dict] = {}
         for pedido in pedidos:
@@ -459,10 +499,7 @@ class MercadoLivreCanal:
         database/pedidos.py::salvar_pedidos_do_dia() espera.
         """
         seller_id = self.obter_id_vendedor()
-
-        pedidos_data_de = f"{dia.isoformat()}T00:00:00.000{FUSO_DATE_CREATED_PEDIDOS}"
-        pedidos_data_ate = f"{dia.isoformat()}T23:59:59.000{FUSO_DATE_CREATED_PEDIDOS}"
-        pedidos = self._obter_pedidos_periodo(seller_id, pedidos_data_de, pedidos_data_ate)
+        pedidos = self._pedidos_do_dia_brasilia(seller_id, dia)
 
         resultado = []
         for pedido in pedidos:
@@ -529,10 +566,7 @@ class MercadoLivreCanal:
         alocado a nenhum item).
         """
         seller_id = self.obter_id_vendedor()
-
-        pedidos_data_de = f"{dia.isoformat()}T00:00:00.000{FUSO_DATE_CREATED_PEDIDOS}"
-        pedidos_data_ate = f"{dia.isoformat()}T23:59:59.000{FUSO_DATE_CREATED_PEDIDOS}"
-        pedidos = self._obter_pedidos_periodo(seller_id, pedidos_data_de, pedidos_data_ate, status=None)
+        pedidos = self._pedidos_do_dia_brasilia(seller_id, dia, status=None)
 
         resultado = []
         for pedido in pedidos:
