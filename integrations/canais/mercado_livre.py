@@ -486,11 +486,16 @@ class MercadoLivreCanal:
                 "visitas": visitas_por_item.get(item_id, 0),
                 "vendas_quantidade": vendas["quantidade"],
                 "receita": vendas["receita"],
-                # available_quantity/status já vêm nesse mesmo body (sem
-                # chamada de API extra) - usados pro alerta de divergência
-                # de estoque (ver database/estoque.py).
+                # available_quantity/status/inventory_id/user_product_id já
+                # vêm nesse mesmo body (sem chamada de API extra) - usados
+                # pro alerta de divergência de estoque (ver
+                # database/estoque.py). inventory_id/user_product_id
+                # identifica anúncios "vinculados" (mesmo produto, várias
+                # publicações) - o ML sincroniza o estoque sozinho entre
+                # eles, então precisam ser deduplicados antes de somar.
                 "estoque_disponivel": item.get("available_quantity"),
                 "status": item.get("status"),
+                "grupo_estoque_id": item.get("inventory_id") or item.get("user_product_id"),
             })
 
         return dados_anuncios

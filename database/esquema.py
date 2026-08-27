@@ -229,6 +229,14 @@ _MIGRACOES_COLUNA = [
     ("custo_produtos", "estoque_saldo", "INTEGER"),
     ("anuncios", "estoque_disponivel", "INTEGER"),
     ("anuncios", "status", "TEXT"),
+    # Identificador do "produto vinculado" do Mercado Livre (inventory_id
+    # ou, na ausência, user_product_id) - quando 2+ anúncios da MESMA conta
+    # compartilham esse id, o ML sincroniza o estoque entre eles sozinho
+    # (vender em um desconta dos outros); por isso NÃO dá pra somar
+    # estoque_disponivel por SKU sem antes deduplicar por esse grupo,
+    # senão o mesmo estoque físico é contado 2x (achado real testando: SKU
+    # com 2 anúncios vinculados, 9 unidades reais, contado como 18).
+    ("anuncios", "grupo_estoque_id", "TEXT"),
 ]
 
 

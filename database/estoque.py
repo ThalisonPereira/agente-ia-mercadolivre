@@ -29,6 +29,17 @@ def obter_divergencias() -> list[dict]:
     Compara, por SKU, o estoque real no Bling com a soma do estoque
     publicado em todos os anúncios ATIVOS (de qualquer conta) daquele SKU.
 
+    Importante: quando 2+ anúncios da MESMA conta compartilham o mesmo
+    "produto vinculado" do Mercado Livre (inventory_id, ou na ausência
+    user_product_id - ver anuncios.grupo_estoque_id), o próprio ML já
+    sincroniza o estoque entre eles sozinho (vender em um desconta dos
+    outros) - não é uma divergência real, é o MESMO estoque reportado em
+    duplicidade. Por isso soma-se só 1x por grupo vinculado (por conta),
+    nunca por anúncio - achado real testando: SKU com 2 anúncios
+    vinculados, 9 unidades reais, seria contado como 18 sem essa dedup.
+    O que o Mercado Livre de fato NÃO sincroniza é entre CONTAS diferentes
+    (hc/wc/cc são vendedores distintos) - esse é o risco real que sobra.
+
     categoria:
     - "risco_venda_sem_estoque": publicado mais do que existe de verdade -
       pode vender sem ter o produto (o caso grave).
@@ -40,16 +51,22 @@ def obter_divergencias() -> list[dict]:
       Extrato.
     """
     sql = """
+        WITH grupos AS (
+            SELECT DISTINCT ON (conta_id, COALESCE(grupo_estoque_id, item_id))
+                conta_id, sku, estoque_disponivel
+            FROM anuncios
+            WHERE status = 'active' AND sku IS NOT NULL AND sku != ''
+            ORDER BY conta_id, COALESCE(grupo_estoque_id, item_id), item_id
+        )
         SELECT
-            a.sku,
-            SUM(a.estoque_disponivel) AS soma_ml,
-            COUNT(*) AS anuncios_ativos,
+            g.sku,
+            SUM(g.estoque_disponivel) AS soma_ml,
+            COUNT(*) AS grupos_estoque,
             MAX(cp.estoque_saldo) AS saldo_bling,
             BOOL_OR(cp.sku IS NULL) AS sem_bling
-        FROM anuncios a
-        LEFT JOIN custo_produtos cp ON cp.sku = a.sku
-        WHERE a.status = 'active' AND a.sku IS NOT NULL AND a.sku != ''
-        GROUP BY a.sku
+        FROM grupos g
+        LEFT JOIN custo_produtos cp ON cp.sku = g.sku
+        GROUP BY g.sku
     """
     conexao = obter_conexao()
     try:
@@ -80,7 +97,7 @@ def obter_divergencias() -> list[dict]:
         resultado.append({
             "sku": linha["sku"],
             "soma_ml": soma_ml,
-            "anuncios_ativos": linha["anuncios_ativos"],
+            "grupos_estoque": linha["grupos_estoque"],
             "saldo_bling": saldo_bling,
             "diferenca": diferenca,
             "categoria": categoria,
