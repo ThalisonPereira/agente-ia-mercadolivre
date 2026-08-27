@@ -21,10 +21,11 @@ from database.contas import cadastrar_conta, obter_contas_ativas
 from database.capturar_snapshot import capturar_snapshot_diario
 from database.analisar_variacao import obter_variacao_anuncios
 from database.historico_completo import obter_datas_existentes
-from database.pedidos import salvar_pedidos_do_dia
+from database.pedidos import salvar_pedidos_do_dia, obter_resumo as obter_resumo_pedidos
 from database.custo_produtos import sincronizar as sincronizar_custo_produtos
 from database.extrato import salvar_itens_venda_do_dia
-from database.ads import salvar_campanhas_do_dia, salvar_anuncios_do_dia
+from database.ads import salvar_campanhas_do_dia, salvar_anuncios_do_dia, obter_resumo as obter_resumo_ads
+from database.kpis import obter_totais_periodo, obter_data_mais_recente
 from database.estoque import obter_divergencias, obter_anuncios_em_risco, salvar_divergencias, salvar_risco
 from agents.analista_ia import analisar_e_salvar
 from agents.analista_ads_ia import analisar_e_salvar_ads
@@ -39,6 +40,81 @@ from agents.analista_estoque_ia import analisar_e_salvar_estoque
 # fica com o status desatualizado (limitação aceita, documentada, não
 # escondida - raríssimo em pagamentos no Brasil).
 DIAS_JANELA_RECONCILIACAO_EXTRATO = 5
+
+
+def _resumo_kpis() -> str:
+    """
+    Monta um resumo compacto em texto dos KPIs mais recentes (vendas,
+    publicidade, pedidos, estoque) - pensado pra ser consumido por
+    ferramentas externas (ex: um agente pessoal agendado, tipo Hermes)
+    via 'python main.py resumo_kpis', não só por gente lendo o console.
+    Só leitura - não coleta nada novo, usa o que a rotina diária já
+    salvou no banco.
+    """
+    contas = obter_contas_ativas()
+    data_recente = obter_data_mais_recente()
+    linhas = [f"=== Resumo — {datetime.now().strftime('%d/%m/%Y %H:%M')} ==="]
+
+    if not contas:
+        linhas.append("Nenhuma conta ativa cadastrada.")
+        return "\n".join(linhas)
+
+    if not data_recente:
+        linhas.append("Ainda não há nenhum dado coletado.")
+        return "\n".join(linhas)
+
+    linhas.append(f"Última coleta: {data_recente}")
+    atrasadas = [
+        c["conta_id"] for c in contas
+        if obter_data_mais_recente(conta_id=c["conta_id"]) != data_recente
+    ]
+    if atrasadas:
+        linhas.append(f"⚠ Conta(s) atrasada(s) na coleta: {', '.join(atrasadas)}")
+
+    totais = obter_totais_periodo(data_recente, data_recente)
+    linhas.append(
+        f"\nVendas de {data_recente}: {totais['vendas']} unidade(s), "
+        f"R$ {totais['receita']:.2f} receita, {totais['visitas']} visita(s)"
+    )
+    for c in contas:
+        t = obter_totais_periodo(data_recente, data_recente, conta_id=c["conta_id"])
+        linhas.append(f"  [{c['conta_id']}] {t['vendas']} vendas · R$ {t['receita']:.2f} · {t['visitas']} visitas")
+
+    ads = obter_resumo_ads(data_recente, data_recente)
+    if ads["cost"]:
+        linhas.append(
+            f"\nPublicidade: R$ {ads['cost']:.2f} investido · ROAS {ads['roas']}x · "
+            f"ACOS {ads['acos']}% · {ads['clicks']} clique(s)"
+        )
+
+    pedidos = obter_resumo_pedidos(data_recente)
+    if pedidos["total"]:
+        linhas.append(
+            f"\nPedidos: {pedidos['total']} · pronto p/ envio {pedidos['imediato']} · "
+            f"aguardando {pedidos['postergado']} · cancelado {pedidos['cancelado']} · "
+            f"R$ {pedidos['valor_total']:.2f}"
+        )
+
+    divergencias = obter_divergencias()
+    criticas = [d for d in divergencias if d["categoria"] == "risco_venda_sem_estoque"]
+    if criticas:
+        linhas.append(f"\n⚠ Estoque - {len(criticas)} SKU(s) com risco de venda sem estoque:")
+        for d in criticas[:5]:
+            linhas.append(f"  {d['sku']}: publicado {d['soma_ml']} vs Bling {d['saldo_bling']} (dif. +{d['diferenca']})")
+    outras = [d for d in divergencias if d["categoria"] != "risco_venda_sem_estoque"]
+    if outras:
+        linhas.append(f"Estoque - {len(outras)} outra(s) divergência(s) sem risco imediato (ex: SKU sem controle no Bling).")
+    if not divergencias:
+        linhas.append("\nEstoque: nenhuma divergência.")
+
+    em_risco = obter_anuncios_em_risco()
+    if em_risco:
+        linhas.append(f"\n⚠ {len(em_risco)} anúncio(s) ranqueado(s) perto de pausar por falta de estoque:")
+        for r in em_risco[:5]:
+            dias = f"{r['dias_restantes_estimados']:.1f}d" if r["dias_restantes_estimados"] is not None else "sem estimativa"
+            linhas.append(f"  {r['anuncio']} ({r['conta_id']}): estoque {r['estoque_disponivel']} · {dias} restante(s)")
+
+    return "\n".join(linhas)
 
 
 def _testar_configuracao() -> None:
@@ -210,6 +286,9 @@ if __name__ == "__main__":
     if comando == "config":
         _testar_configuracao()
 
+    elif comando == "resumo_kpis":
+        print(_resumo_kpis())
+
     elif comando == "cadastrar_conta":
         if len(sys.argv) < 5:
             print("Uso: python main.py cadastrar_conta <conta_id> <canal> <nome>")
@@ -288,4 +367,4 @@ if __name__ == "__main__":
               "bling_passo1|bling_passo2 <code>|bling_passo3|"
               "testar_sheets|coletar_snapshot <conta_id> <canal>|"
               "backfill <conta_id> <canal> <inicio> <fim>|"
-              "analisar_variacao [conta_id]|rotina_diaria]")
+              "analisar_variacao [conta_id]|rotina_diaria|resumo_kpis]")
