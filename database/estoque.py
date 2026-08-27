@@ -11,9 +11,10 @@ sistema externo (Bling ou Mercado Livre), só compara o que já foi
 coletado (database/custo_produtos.py, database/capturar_snapshot.py).
 """
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from database.conexao_supabase import obter_conexao
+from database.esquema import criar_tabelas
 from database.ranking import obter_ranking
 
 # Um anúncio ranqueado entra na lista de risco quando o estoque restante
@@ -190,3 +191,59 @@ def obter_anuncios_em_risco(
 
     resultado.sort(key=lambda x: (x["dias_restantes_estimados"] is None, x["dias_restantes_estimados"] or 0))
     return resultado
+
+
+def salvar_divergencias(divergencias: list[dict]) -> None:
+    """
+    Sobrescreve completamente a tabela estoque_divergencias com o
+    resultado atual de obter_divergencias() - snapshot do estado ATUAL,
+    não histórico (um SKU que deixou de divergir deve sumir da tabela,
+    não ficar com um registro antigo). Existe pro painel Lovable ler o
+    resultado já calculado sem duplicar a lógica de dedup aqui.
+    """
+    criar_tabelas()
+    agora = datetime.now().isoformat(timespec="seconds")
+
+    conexao = obter_conexao()
+    try:
+        conexao.execute("DELETE FROM estoque_divergencias")
+        if divergencias:
+            instrucoes = [
+                (
+                    "INSERT INTO estoque_divergencias "
+                    "(sku, soma_ml, grupos_estoque, saldo_bling, diferenca, categoria, atualizado_em) "
+                    "VALUES (%(sku)s, %(soma_ml)s, %(grupos_estoque)s, %(saldo_bling)s, %(diferenca)s, %(categoria)s, %(atualizado_em)s)",
+                    {**d, "atualizado_em": agora},
+                )
+                for d in divergencias
+            ]
+            conexao.executar_em_lote(instrucoes)
+        conexao.commit()
+    finally:
+        conexao.close()
+
+
+def salvar_risco(em_risco: list[dict]) -> None:
+    """Mesmo princípio de salvar_divergencias(), pro resultado de obter_anuncios_em_risco()."""
+    criar_tabelas()
+    agora = datetime.now().isoformat(timespec="seconds")
+
+    conexao = obter_conexao()
+    try:
+        conexao.execute("DELETE FROM estoque_risco")
+        if em_risco:
+            instrucoes = [
+                (
+                    "INSERT INTO estoque_risco "
+                    "(conta_id, item_id, anuncio, sku, receita_periodo, estoque_disponivel, "
+                    "media_diaria_vendas, dias_restantes_estimados, atualizado_em) "
+                    "VALUES (%(conta_id)s, %(item_id)s, %(anuncio)s, %(sku)s, %(receita_periodo)s, "
+                    "%(estoque_disponivel)s, %(media_diaria_vendas)s, %(dias_restantes_estimados)s, %(atualizado_em)s)",
+                    {**r, "atualizado_em": agora},
+                )
+                for r in em_risco
+            ]
+            conexao.executar_em_lote(instrucoes)
+        conexao.commit()
+    finally:
+        conexao.close()

@@ -25,7 +25,7 @@ from database.pedidos import salvar_pedidos_do_dia
 from database.custo_produtos import sincronizar as sincronizar_custo_produtos
 from database.extrato import salvar_itens_venda_do_dia
 from database.ads import salvar_campanhas_do_dia, salvar_anuncios_do_dia
-from database.estoque import obter_divergencias, obter_anuncios_em_risco
+from database.estoque import obter_divergencias, obter_anuncios_em_risco, salvar_divergencias, salvar_risco
 from agents.analista_ia import analisar_e_salvar
 from agents.analista_ads_ia import analisar_e_salvar_ads
 from agents.analista_estoque_ia import analisar_e_salvar_estoque
@@ -191,6 +191,11 @@ def _rotina_diaria() -> None:
     try:
         divergencias = obter_divergencias()
         em_risco = obter_anuncios_em_risco()
+        # Sobrescreve o snapshot mesmo quando vazio - um SKU que deixou de
+        # divergir não pode ficar preso na tabela com dado velho (ver
+        # database/estoque.py::salvar_divergencias).
+        salvar_divergencias(divergencias)
+        salvar_risco(em_risco)
         if divergencias or em_risco:
             analisar_e_salvar_estoque(divergencias, em_risco, datetime.now().date().isoformat())
         else:

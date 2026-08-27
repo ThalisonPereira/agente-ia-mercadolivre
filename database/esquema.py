@@ -209,6 +209,40 @@ CREATE TABLE IF NOT EXISTS analises_estoque_diarias (
 );
 """
 
+# Snapshot do resultado já calculado por database/estoque.py::obter_divergencias()
+# - sempre reflete só o estado ATUAL (não é histórico por dia, é
+# sobrescrita completa a cada rodada da rotina, ver
+# database/estoque.py::salvar_divergencias). Existe pra o painel Lovable
+# (e qualquer outro consumidor) só LER o resultado já pronto, sem
+# duplicar a lógica de dedup de anúncios vinculados em outro lugar.
+CRIAR_TABELA_ESTOQUE_DIVERGENCIAS = """
+CREATE TABLE IF NOT EXISTS estoque_divergencias (
+    sku              TEXT PRIMARY KEY,
+    soma_ml          INTEGER,
+    grupos_estoque   INTEGER,
+    saldo_bling      INTEGER,
+    diferenca        INTEGER,
+    categoria        TEXT,
+    atualizado_em    TEXT
+);
+"""
+
+# Mesmo princípio, pro resultado de obter_anuncios_em_risco().
+CRIAR_TABELA_ESTOQUE_RISCO = """
+CREATE TABLE IF NOT EXISTS estoque_risco (
+    conta_id                   TEXT,
+    item_id                    TEXT,
+    anuncio                    TEXT,
+    sku                        TEXT,
+    receita_periodo            REAL,
+    estoque_disponivel         INTEGER,
+    media_diaria_vendas        REAL,
+    dias_restantes_estimados   REAL,
+    atualizado_em              TEXT,
+    PRIMARY KEY (conta_id, item_id)
+);
+"""
+
 # Migrações incrementais - adicionam coluna a tabelas que já existiam antes
 # dela ser criada. "CREATE TABLE IF NOT EXISTS" não altera tabela já
 # existente, por isso precisa desse passo à parte. Cada entrada é
@@ -269,13 +303,15 @@ def criar_tabelas() -> None:
         conexao.execute(CRIAR_TABELA_ADS_ANUNCIOS_DIARIO)
         conexao.execute(CRIAR_TABELA_ANALISES_ADS_DIARIAS)
         conexao.execute(CRIAR_TABELA_ANALISES_ESTOQUE_DIARIAS)
+        conexao.execute(CRIAR_TABELA_ESTOQUE_DIVERGENCIAS)
+        conexao.execute(CRIAR_TABELA_ESTOQUE_RISCO)
         _aplicar_migracoes(conexao)
         conexao.commit()
         print(
             "Tabelas prontas: contas, anuncios, historico_anuncios_diario, "
             "analises_diarias, tokens_oauth, pedidos, custo_produtos, itens_venda, "
             "ads_campanhas_diario, ads_anuncios_diario, analises_ads_diarias, "
-            "analises_estoque_diarias."
+            "analises_estoque_diarias, estoque_divergencias, estoque_risco."
         )
     finally:
         conexao.close()
