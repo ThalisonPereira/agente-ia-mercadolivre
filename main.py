@@ -25,8 +25,10 @@ from database.pedidos import salvar_pedidos_do_dia
 from database.custo_produtos import sincronizar as sincronizar_custo_produtos
 from database.extrato import salvar_itens_venda_do_dia
 from database.ads import salvar_campanhas_do_dia, salvar_anuncios_do_dia
+from database.estoque import obter_divergencias, obter_anuncios_em_risco
 from agents.analista_ia import analisar_e_salvar
 from agents.analista_ads_ia import analisar_e_salvar_ads
+from agents.analista_estoque_ia import analisar_e_salvar_estoque
 
 # Quantos dias pra trás a rotina diária reprocessa o extrato de vendas (não
 # só "ontem"). Necessário porque um pedido pode ficar "pendente" (aguardando
@@ -182,6 +184,19 @@ def _rotina_diaria() -> None:
         data_str = dia.isoformat()
         texto_analise = analisar_e_salvar(variacao, data_str, conta_id=conta_id)
         publicar_analise_no_sheets(texto_analise, data_str, conta_id)
+
+    # Depois do loop por conta (só faz sentido comparar estoque com as 3
+    # contas já atualizadas nesta rodada) - estoque é compartilhado pelas
+    # contas, então é uma análise única "geral", não por conta.
+    try:
+        divergencias = obter_divergencias()
+        em_risco = obter_anuncios_em_risco()
+        if divergencias or em_risco:
+            analisar_e_salvar_estoque(divergencias, em_risco, datetime.now().date().isoformat())
+        else:
+            print("Estoque: nenhuma divergência nem anúncio ranqueado em risco hoje.")
+    except Exception as erro:
+        print(f"Falha ao analisar estoque: {erro}")
 
 
 if __name__ == "__main__":

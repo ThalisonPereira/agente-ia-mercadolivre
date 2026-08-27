@@ -2,9 +2,10 @@
 database/capturar_snapshot.py
 
 Registra o snapshot de hoje (visitas, vendas e receita por anúncio) no
-histórico diário, e mantém a tabela 'anuncios' com o título/SKU mais
-recente de cada item. Deve rodar uma vez por dia, por conta, depois de
-coletar os dados na API do canal correspondente (Mercado Livre, Shopee...).
+histórico diário, e mantém a tabela 'anuncios' com o título/SKU/estoque/
+status mais recente de cada item. Deve rodar uma vez por dia, por conta,
+depois de coletar os dados na API do canal correspondente (Mercado
+Livre, Shopee...).
 """
 
 from datetime import date, datetime
@@ -13,11 +14,13 @@ from database.conexao_supabase import obter_conexao
 from database.esquema import criar_tabelas
 
 UPSERT_ANUNCIO = """
-INSERT INTO anuncios (conta_id, item_id, titulo, sku, atualizado_em)
-VALUES (%(conta_id)s, %(item_id)s, %(titulo)s, %(sku)s, %(atualizado_em)s)
+INSERT INTO anuncios (conta_id, item_id, titulo, sku, estoque_disponivel, status, atualizado_em)
+VALUES (%(conta_id)s, %(item_id)s, %(titulo)s, %(sku)s, %(estoque_disponivel)s, %(status)s, %(atualizado_em)s)
 ON CONFLICT(conta_id, item_id) DO UPDATE SET
     titulo = excluded.titulo,
     sku = excluded.sku,
+    estoque_disponivel = excluded.estoque_disponivel,
+    status = excluded.status,
     atualizado_em = excluded.atualizado_em;
 """
 
@@ -62,6 +65,8 @@ def capturar_snapshot_diario(conta_id: str, dados_anuncios: list[dict], dia: dat
                 "item_id": item["item_id"],
                 "titulo": item["titulo"],
                 "sku": item.get("sku", ""),
+                "estoque_disponivel": item.get("estoque_disponivel"),
+                "status": item.get("status"),
                 "atualizado_em": agora,
             }))
             instrucoes.append((UPSERT_SNAPSHOT, {

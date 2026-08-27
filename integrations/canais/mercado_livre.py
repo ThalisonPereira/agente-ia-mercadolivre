@@ -486,6 +486,11 @@ class MercadoLivreCanal:
                 "visitas": visitas_por_item.get(item_id, 0),
                 "vendas_quantidade": vendas["quantidade"],
                 "receita": vendas["receita"],
+                # available_quantity/status já vêm nesse mesmo body (sem
+                # chamada de API extra) - usados pro alerta de divergência
+                # de estoque (ver database/estoque.py).
+                "estoque_disponivel": item.get("available_quantity"),
+                "status": item.get("status"),
             })
 
         return dados_anuncios

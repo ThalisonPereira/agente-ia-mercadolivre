@@ -197,6 +197,18 @@ CREATE TABLE IF NOT EXISTS analises_ads_diarias (
 );
 """
 
+# Análise narrativa diária de estoque (divergência Bling x Mercado Livre +
+# anúncios ranqueados em risco de pausar) - SEM conta_id, diferente das
+# outras análises: estoque é compartilhado pelas 3 contas (mesmo depósito
+# físico no Bling), então é sempre uma análise única "geral" por dia.
+CRIAR_TABELA_ANALISES_ESTOQUE_DIARIAS = """
+CREATE TABLE IF NOT EXISTS analises_estoque_diarias (
+    data         TEXT PRIMARY KEY,
+    texto        TEXT,
+    gerado_em    TEXT
+);
+"""
+
 # Migrações incrementais - adicionam coluna a tabelas que já existiam antes
 # dela ser criada. "CREATE TABLE IF NOT EXISTS" não altera tabela já
 # existente, por isso precisa desse passo à parte. Cada entrada é
@@ -210,6 +222,13 @@ _MIGRACOES_COLUNA = [
     # antiga não muda retroativamente se o custo mudar depois no Bling, e o
     # cálculo já multiplica pela quantidade da linha (ver database/extrato.py).
     ("itens_venda", "custo_unitario_capturado", "REAL"),
+    # Estoque (Bling: estoque.saldoVirtualTotal; ML: available_quantity +
+    # status) - os dois já vêm de graça nas chamadas que o projeto já faz
+    # todo dia (listar_produtos/coletar_dados_do_dia), só não eram gravados
+    # até agora. Ver database/estoque.py pro cálculo de divergência/risco.
+    ("custo_produtos", "estoque_saldo", "INTEGER"),
+    ("anuncios", "estoque_disponivel", "INTEGER"),
+    ("anuncios", "status", "TEXT"),
 ]
 
 
@@ -241,12 +260,14 @@ def criar_tabelas() -> None:
         conexao.execute(CRIAR_TABELA_ADS_CAMPANHAS_DIARIO)
         conexao.execute(CRIAR_TABELA_ADS_ANUNCIOS_DIARIO)
         conexao.execute(CRIAR_TABELA_ANALISES_ADS_DIARIAS)
+        conexao.execute(CRIAR_TABELA_ANALISES_ESTOQUE_DIARIAS)
         _aplicar_migracoes(conexao)
         conexao.commit()
         print(
             "Tabelas prontas: contas, anuncios, historico_anuncios_diario, "
             "analises_diarias, tokens_oauth, pedidos, custo_produtos, itens_venda, "
-            "ads_campanhas_diario, ads_anuncios_diario, analises_ads_diarias."
+            "ads_campanhas_diario, ads_anuncios_diario, analises_ads_diarias, "
+            "analises_estoque_diarias."
         )
     finally:
         conexao.close()

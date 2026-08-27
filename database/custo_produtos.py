@@ -1,9 +1,13 @@
 """
 database/custo_produtos.py
 
-Cache local do custo de produto do Bling (por SKU), sincronizado 1x por
-dia junto da rotina - fonte pro cálculo de margem em database/extrato.py.
-Não é multi-conta: o Bling é uma credencial única (ver integrations/bling.py).
+Cache local do custo E ESTOQUE de produto do Bling (por SKU), sincronizado
+1x por dia junto da rotina - fonte pro cálculo de margem em
+database/extrato.py e pro alerta de divergência de estoque em
+database/estoque.py. Os dois campos vêm do mesmo payload de
+BlingClient.listar_produtos() (GET /produtos), por isso ficam na mesma
+tabela em vez de duas sincronizações separadas. Não é multi-conta: o
+Bling é uma credencial única (ver integrations/bling.py).
 """
 
 from datetime import datetime
@@ -12,12 +16,13 @@ from database.conexao_supabase import obter_conexao
 from database.esquema import criar_tabelas
 
 UPSERT_CUSTO = """
-INSERT INTO custo_produtos (sku, produto_id_bling, nome, preco_custo, atualizado_em)
-VALUES (%(sku)s, %(produto_id_bling)s, %(nome)s, %(preco_custo)s, %(atualizado_em)s)
+INSERT INTO custo_produtos (sku, produto_id_bling, nome, preco_custo, estoque_saldo, atualizado_em)
+VALUES (%(sku)s, %(produto_id_bling)s, %(nome)s, %(preco_custo)s, %(estoque_saldo)s, %(atualizado_em)s)
 ON CONFLICT(sku) DO UPDATE SET
     produto_id_bling = excluded.produto_id_bling,
     nome = excluded.nome,
     preco_custo = excluded.preco_custo,
+    estoque_saldo = excluded.estoque_saldo,
     atualizado_em = excluded.atualizado_em;
 """
 
@@ -45,6 +50,7 @@ def sincronizar(produtos_bling: list[dict]) -> int:
             "produto_id_bling": str(produto.get("id", "")),
             "nome": produto.get("nome", ""),
             "preco_custo": produto.get("precoCusto", 0.0),
+            "estoque_saldo": produto.get("estoque", {}).get("saldoVirtualTotal"),
             "atualizado_em": agora,
         }))
 
