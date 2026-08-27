@@ -6,10 +6,17 @@ name: Rotina diária
 # main.py::_rotina_diaria().
 on:
   schedule:
-    # 08:00 UTC = 05:00 no horário de Brasília (sem horário de verão) - roda
-    # bem depois da meia-noite em Brasília, garantindo que "ontem" já é um
-    # dia calendário completo antes de coletar.
-    - cron: "0 8 * * *"
+    # O GitHub Actions não garante o horário exato de um "schedule" - pode
+    # atrasar (às vezes horas) em picos de carga na infraestrutura deles, e
+    # já aconteceu de não disparar nenhuma vez num dia. Por isso dois
+    # disparos por dia, bem adiantados em relação ao prazo real (07:30 no
+    # horário de Brasília) - a rotina é segura de rodar mais de uma vez
+    # (grava por UPSERT, sem duplicar dado), então o segundo disparo é só
+    # uma rede de segurança: se o primeiro já rodou certinho, o segundo
+    # reprocessa e confirma; se o primeiro atrasou ou falhou, o segundo
+    # cobre o buraco.
+    - cron: "0 4 * * *"  # 04:00 UTC = 01:00 Brasília (sem horário de verão)
+    - cron: "0 7 * * *"  # 07:00 UTC = 04:00 Brasília
   workflow_dispatch: {}  # permite rodar manualmente pela aba Actions do GitHub
 
 jobs:
