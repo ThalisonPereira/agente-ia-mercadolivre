@@ -27,48 +27,47 @@ ESTOQUE_MINIMO_ABSOLUTO = 3
 
 def obter_divergencias() -> list[dict]:
     """
-    Compara, por SKU, o estoque real no Bling com a soma do estoque
-    publicado em todos os anúncios ATIVOS (de qualquer conta) daquele SKU.
+    Compara, POR ANÚNCIO (ou grupo de anúncios vinculados dentro da MESMA
+    conta), o estoque publicado no Mercado Livre com o saldo real no Bling
+    do SKU daquele anúncio.
 
-    Importante: quando 2+ anúncios da MESMA conta compartilham o mesmo
-    "produto vinculado" do Mercado Livre (inventory_id, ou na ausência
-    user_product_id - ver anuncios.grupo_estoque_id), o próprio ML já
-    sincroniza o estoque entre eles sozinho (vender em um desconta dos
-    outros) - não é uma divergência real, é o MESMO estoque reportado em
-    duplicidade. Por isso soma-se só 1x por grupo vinculado (por conta),
-    nunca por anúncio - achado real testando: SKU com 2 anúncios
-    vinculados, 9 unidades reais, seria contado como 18 sem essa dedup.
-    O que o Mercado Livre de fato NÃO sincroniza é entre CONTAS diferentes
-    (hc/wc/cc são vendedores distintos) - esse é o risco real que sobra.
+    Importante (corrigido a pedido do usuário, achado real testando SKU
+    '22001'): NÃO soma o estoque de anúncios diferentes só porque
+    compartilham o mesmo SKU - só quando estão VINCULADOS de verdade
+    (mesmo grupo_estoque_id, dentro da MESMA conta - aí sim o Mercado
+    Livre sincroniza sozinho, vender em um desconta dos outros). Anúncios
+    que só coincidem no texto do SKU mas não estão vinculados são
+    contadores INDEPENDENTES - cada um pode legitimamente refletir o
+    mesmo saldo do Bling sem que isso seja um problema (3 anúncios
+    diferentes do SKU '22001', cada um mostrando 287 = saldo do Bling,
+    bateria certo nos 3; somar os 3 geraria uma divergência de +574 que
+    não existe de verdade - foi exatamente esse falso positivo que o
+    usuário reportou). Por isso cada anúncio (ou grupo vinculado) é
+    avaliado SOZINHO contra o saldo total do Bling, nunca somado com
+    outro anúncio não vinculado.
 
     categoria:
-    - "risco_venda_sem_estoque": publicado mais do que existe de verdade -
-      pode vender sem ter o produto (o caso grave).
-    - "estoque_nao_publicado": tem mais estoque real do que publicado -
-      oportunidade perdida de venda, não é urgente.
+    - "risco_venda_sem_estoque": esse anúncio sozinho publica mais do que
+      existe de verdade no Bling - pode vender sem ter o produto.
+    - "estoque_nao_publicado": tem mais estoque real no Bling do que esse
+      anúncio publica - oportunidade perdida de venda, não é urgente.
     - "sem_controle_bling": SKU tem anúncio ativo mas nunca foi
       sincronizado do Bling (sem linha em custo_produtos) - sinalizado,
       não escondido, mesmo princípio já usado pro custo desconhecido no
       Extrato.
     """
     sql = """
-        WITH grupos AS (
-            SELECT DISTINCT ON (conta_id, COALESCE(grupo_estoque_id, item_id))
-                conta_id, sku, estoque_disponivel
-            FROM anuncios
-            WHERE status = 'active' AND sku IS NOT NULL AND sku != ''
-            ORDER BY conta_id, COALESCE(grupo_estoque_id, item_id), item_id
-        )
-        SELECT
-            g.sku,
-            SUM(g.estoque_disponivel) AS soma_ml,
-            COUNT(*) AS grupos_estoque,
-            STRING_AGG(DISTINCT g.conta_id, ',' ORDER BY g.conta_id) AS contas,
-            MAX(cp.estoque_saldo) AS saldo_bling,
-            BOOL_OR(cp.sku IS NULL) AS sem_bling
-        FROM grupos g
-        LEFT JOIN custo_produtos cp ON cp.sku = g.sku
-        GROUP BY g.sku
+        SELECT DISTINCT ON (a.conta_id, COALESCE(a.grupo_estoque_id, a.item_id))
+            a.conta_id, a.item_id, a.titulo, a.sku, a.estoque_disponivel AS publicado,
+            cp.estoque_saldo AS saldo_bling,
+            cp.sku IS NULL AS sem_bling
+        FROM anuncios a
+        -- LOWER dos dois lados: o mesmo SKU pode vir em letra diferente no
+        -- Mercado Livre e no Bling (achado real: '22001x10' no ML vs
+        -- '22001X10' no Bling) - Postgres é case-sensitive por padrão.
+        LEFT JOIN custo_produtos cp ON LOWER(cp.sku) = LOWER(a.sku)
+        WHERE a.status = 'active' AND a.sku IS NOT NULL AND a.sku != ''
+        ORDER BY a.conta_id, COALESCE(a.grupo_estoque_id, a.item_id), a.item_id
     """
     conexao = obter_conexao()
     try:
@@ -76,9 +75,16 @@ def obter_divergencias() -> list[dict]:
     finally:
         conexao.close()
 
+    # Quantos OUTROS anúncios (fora este) publicam o mesmo SKU - só
+    # informativo, pra o usuário saber que existe mais de 1 pra olhar se
+    # quiser, sem entrar em nenhuma soma/cálculo de divergência.
+    contagem_por_sku: dict[str, int] = {}
+    for linha in linhas:
+        contagem_por_sku[linha["sku"]] = contagem_por_sku.get(linha["sku"], 0) + 1
+
     resultado = []
     for linha in linhas:
-        soma_ml = linha["soma_ml"] or 0
+        publicado = linha["publicado"] or 0
         sem_bling = linha["sem_bling"]
         saldo_bling = linha["saldo_bling"]
 
@@ -86,7 +92,7 @@ def obter_divergencias() -> list[dict]:
             categoria = "sem_controle_bling"
             diferenca = None
         else:
-            diferenca = soma_ml - saldo_bling
+            diferenca = publicado - saldo_bling
             categoria = (
                 "risco_venda_sem_estoque" if diferenca > 0
                 else "estoque_nao_publicado" if diferenca < 0
@@ -97,16 +103,15 @@ def obter_divergencias() -> list[dict]:
             continue
 
         resultado.append({
+            "conta_id": linha["conta_id"],
+            "item_id": linha["item_id"],
+            "titulo": linha["titulo"],
             "sku": linha["sku"],
-            "soma_ml": soma_ml,
-            "grupos_estoque": linha["grupos_estoque"],
-            # Conta(s) (hc/wc/cc) onde esse SKU está publicado - sem isso
-            # não dava pra saber em qual conta ir procurar o anúncio no
-            # Mercado Livre pra corrigir (achado real do usuário).
-            "contas": linha["contas"],
+            "publicado": publicado,
             "saldo_bling": saldo_bling,
             "diferenca": diferenca,
             "categoria": categoria,
+            "outros_anuncios_mesmo_sku": contagem_por_sku[linha["sku"]] - 1,
         })
 
     resultado.sort(key=lambda x: (x["diferenca"] is None, -(x["diferenca"] or 0)))
@@ -216,8 +221,8 @@ def salvar_divergencias(divergencias: list[dict]) -> None:
             instrucoes = [
                 (
                     "INSERT INTO estoque_divergencias "
-                    "(sku, soma_ml, grupos_estoque, contas, saldo_bling, diferenca, categoria, atualizado_em) "
-                    "VALUES (%(sku)s, %(soma_ml)s, %(grupos_estoque)s, %(contas)s, %(saldo_bling)s, %(diferenca)s, %(categoria)s, %(atualizado_em)s)",
+                    "(conta_id, item_id, titulo, sku, publicado, saldo_bling, diferenca, categoria, outros_anuncios_mesmo_sku, atualizado_em) "
+                    "VALUES (%(conta_id)s, %(item_id)s, %(titulo)s, %(sku)s, %(publicado)s, %(saldo_bling)s, %(diferenca)s, %(categoria)s, %(outros_anuncios_mesmo_sku)s, %(atualizado_em)s)",
                     {**d, "atualizado_em": agora},
                 )
                 for d in divergencias

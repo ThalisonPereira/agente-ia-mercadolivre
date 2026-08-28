@@ -75,8 +75,13 @@ def obter_custo(sku: str) -> float | None:
     """
     conexao = obter_conexao()
     try:
+        # Comparação case-insensitive (LOWER dos dois lados) - achado real:
+        # o mesmo produto pode ter o SKU em letra diferente no Mercado
+        # Livre e no Bling (ex: '22001x10' vs '22001X10'), e o Postgres é
+        # case-sensitive por padrão - um '=' direto perderia o custo desse
+        # produto silenciosamente.
         linha = conexao.execute(
-            "SELECT preco_custo FROM custo_produtos WHERE sku = %(sku)s", {"sku": sku}
+            "SELECT preco_custo FROM custo_produtos WHERE LOWER(sku) = LOWER(%(sku)s)", {"sku": sku}
         ).fetchone()
     finally:
         conexao.close()

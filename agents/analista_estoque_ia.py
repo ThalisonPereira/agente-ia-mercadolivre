@@ -39,13 +39,14 @@ def _montar_resumo_precalculado(divergencias: list[dict], em_risco: list[dict]) 
 def _montar_tabela_divergencias(divergencias: list[dict]) -> str:
     if not divergencias:
         return "(nenhuma divergência encontrada)"
-    cabecalho = "SKU | Categoria | Publicado (soma ML, já sem contar 2x anúncios vinculados) | Estoque Bling | Diferença | Grupos de estoque distintos"
+    cabecalho = "Anúncio | Conta | SKU | Publicado (ML) | Estoque Bling | Diferença | Outros anúncios com esse SKU | Categoria"
     corpo = [cabecalho, "-" * len(cabecalho)]
     for d in divergencias:
         corpo.append(
-            f"{d['sku']} | {d['categoria']} | {d['soma_ml']} | "
+            f"{d['titulo']} ({d['item_id']}) | {d['conta_id']} | {d['sku']} | {d['publicado']} | "
             f"{d['saldo_bling'] if d['saldo_bling'] is not None else '—'} | "
-            f"{d['diferenca'] if d['diferenca'] is not None else '—'} | {d['grupos_estoque']}"
+            f"{d['diferenca'] if d['diferenca'] is not None else '—'} | "
+            f"{d['outros_anuncios_mesmo_sku']} | {d['categoria']}"
         )
     return "\n".join(corpo)
 

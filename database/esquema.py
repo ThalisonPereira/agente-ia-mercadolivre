@@ -254,16 +254,24 @@ CREATE TABLE IF NOT EXISTS analises_estoque_diarias (
 # database/estoque.py::salvar_divergencias). Existe pra o painel Lovable
 # (e qualquer outro consumidor) só LER o resultado já pronto, sem
 # duplicar a lógica de dedup de anúncios vinculados em outro lugar.
+# Uma linha por ANÚNCIO (ou grupo de anúncios vinculados dentro da mesma
+# conta - ver database/estoque.py) - NÃO por SKU somado entre anúncios
+# não vinculados (mudança de desenho: somar gerava falso positivo quando
+# vários anúncios independentes coincidem no mesmo SKU, achado real do
+# usuário testando SKU '22001').
 CRIAR_TABELA_ESTOQUE_DIVERGENCIAS = """
 CREATE TABLE IF NOT EXISTS estoque_divergencias (
-    sku              TEXT PRIMARY KEY,
-    soma_ml          INTEGER,
-    grupos_estoque   INTEGER,
-    saldo_bling      INTEGER,
-    diferenca        INTEGER,
-    categoria        TEXT,
-    contas           TEXT,
-    atualizado_em    TEXT
+    conta_id                    TEXT,
+    item_id                     TEXT,
+    titulo                      TEXT,
+    sku                         TEXT,
+    publicado                   INTEGER,
+    saldo_bling                 INTEGER,
+    diferenca                   INTEGER,
+    categoria                   TEXT,
+    outros_anuncios_mesmo_sku   INTEGER,
+    atualizado_em                TEXT,
+    PRIMARY KEY (conta_id, item_id)
 );
 """
 
@@ -315,12 +323,6 @@ _MIGRACOES_COLUNA = [
     # ML) - capturado no momento da gravação do item de venda, mesmo
     # princípio de custo_unitario_capturado (snapshot, não JOIN dinâmico).
     ("itens_venda", "numero_pedido_bling", "TEXT"),
-    # Conta(s) (hc/wc/cc) onde o SKU divergente está publicado - sem isso o
-    # usuário não sabia em qual conta ir procurar o anúncio pra corrigir
-    # (achado real: usuário procurou o SKU na conta errada do Mercado
-    # Livre e não achou). Lista separada por vírgula (mesmo princípio
-    # simples já usado no resto do schema, sem precisar de tabela à parte).
-    ("estoque_divergencias", "contas", "TEXT"),
 ]
 
 
@@ -337,10 +339,30 @@ def _aplicar_migracoes(conexao) -> None:
             conexao.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {definicao}")
 
 
+def _migrar_estoque_divergencias(conexao) -> None:
+    """
+    estoque_divergencias mudou de "1 linha por SKU somado" pra "1 linha
+    por anúncio" (chave/colunas diferentes - ver database/estoque.py) -
+    "CREATE TABLE IF NOT EXISTS" não altera uma tabela já existente no
+    formato antigo, então descarta e recria. Seguro: é só um snapshot
+    sempre sobrescrito por completo a cada rodada (salvar_divergencias),
+    não guarda histórico.
+    """
+    colunas_existentes = {
+        linha["column_name"]
+        for linha in conexao.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'estoque_divergencias'"
+        ).fetchall()
+    }
+    if colunas_existentes and "item_id" not in colunas_existentes:
+        conexao.execute("DROP TABLE estoque_divergencias")
+
+
 def criar_tabelas() -> None:
     """Cria todas as tabelas do banco, se ainda não existirem, e aplica migrações incrementais."""
     conexao = obter_conexao()
     try:
+        _migrar_estoque_divergencias(conexao)
         conexao.execute(CRIAR_TABELA_CONTAS)
         conexao.execute(CRIAR_TABELA_ANUNCIOS)
         conexao.execute(CRIAR_TABELA_HISTORICO_DIARIO)
