@@ -141,6 +141,31 @@ CREATE TABLE IF NOT EXISTS itens_venda (
 );
 """
 
+# Pedidos criados num dia mas só pagos (fechados) em outro dia (comum com
+# boleto) - o relatório oficial do Mercado Livre parece contar pela data de
+# PAGAMENTO, enquanto itens_venda conta pela data de CRIAÇÃO (decisão
+# consciente do usuário, ver database/extrato.py). Essa tabela não altera
+# esse critério - só guarda uma referência do pedido no dia em que ele
+# apareceria no relatório oficial, pra explicar a diferença de totais sem
+# o usuário precisar investigar de novo toda vez que aparecer. Nunca conta
+# em nenhum total (ver database/extrato_referencia.py) - é só observação.
+CRIAR_TABELA_ITENS_VENDA_REFERENCIA = """
+CREATE TABLE IF NOT EXISTS itens_venda_referencia (
+    conta_id             TEXT,
+    pedido_id            TEXT,
+    item_id              TEXT,
+    sku                  TEXT,
+    titulo               TEXT,
+    data_pagamento       TEXT,
+    data_criacao         TEXT,
+    quantidade           INTEGER,
+    preco_venda          REAL,
+    numero_pedido_bling  TEXT,
+    capturado_em         TEXT,
+    PRIMARY KEY (conta_id, pedido_id, item_id, data_pagamento)
+);
+"""
+
 # Publicidade (Mercado Ads / Product Ads) - 1 linha por campanha/anúncio por
 # dia (mesmo princípio de historico_anuncios_diario), com as métricas já
 # somadas pro dia pela própria API do Mercado Livre (date_from == date_to).
@@ -318,6 +343,7 @@ def criar_tabelas() -> None:
         conexao.execute(CRIAR_TABELA_CUSTO_PRODUTOS)
         conexao.execute(CRIAR_TABELA_PEDIDOS_BLING)
         conexao.execute(CRIAR_TABELA_ITENS_VENDA)
+        conexao.execute(CRIAR_TABELA_ITENS_VENDA_REFERENCIA)
         conexao.execute(CRIAR_TABELA_ADS_CAMPANHAS_DIARIO)
         conexao.execute(CRIAR_TABELA_ADS_ANUNCIOS_DIARIO)
         conexao.execute(CRIAR_TABELA_ANALISES_ADS_DIARIAS)
@@ -330,7 +356,8 @@ def criar_tabelas() -> None:
             "Tabelas prontas: contas, anuncios, historico_anuncios_diario, "
             "analises_diarias, tokens_oauth, pedidos, custo_produtos, itens_venda, "
             "ads_campanhas_diario, ads_anuncios_diario, analises_ads_diarias, "
-            "analises_estoque_diarias, estoque_divergencias, estoque_risco, pedidos_bling."
+            "analises_estoque_diarias, estoque_divergencias, estoque_risco, pedidos_bling, "
+            "itens_venda_referencia."
         )
     finally:
         conexao.close()

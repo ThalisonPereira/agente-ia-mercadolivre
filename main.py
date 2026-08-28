@@ -25,6 +25,7 @@ from database.pedidos import salvar_pedidos_do_dia, obter_resumo as obter_resumo
 from database.custo_produtos import sincronizar as sincronizar_custo_produtos
 from database.pedidos_bling import sincronizar as sincronizar_pedidos_bling
 from database.extrato import salvar_itens_venda_do_dia
+from database.extrato_referencia import salvar_referencias_do_dia
 from database.ads import salvar_campanhas_do_dia, salvar_anuncios_do_dia, obter_resumo as obter_resumo_ads
 from database.kpis import obter_totais_periodo, obter_data_mais_recente
 from database.estoque import obter_divergencias, obter_anuncios_em_risco, salvar_divergencias, salvar_risco
@@ -242,6 +243,8 @@ def _rotina_diaria() -> None:
                 dia_reconciliacao = dia - timedelta(days=offset)
                 itens_venda = adaptador_extrato.coletar_extrato_do_dia(dia_reconciliacao)
                 salvar_itens_venda_do_dia(conta_id, itens_venda, dia_reconciliacao)
+                referencias = adaptador_extrato.coletar_referencias_pagamento_do_dia(dia_reconciliacao)
+                salvar_referencias_do_dia(conta_id, referencias, dia_reconciliacao)
         except NotImplementedError as erro:
             print(f"[conta: {conta_id}] {erro}")
         except Exception as erro:

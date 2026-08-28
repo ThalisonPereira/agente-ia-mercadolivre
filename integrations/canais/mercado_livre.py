@@ -344,7 +344,12 @@ class MercadoLivreCanal:
         return visitas
 
     def _obter_pedidos_periodo(
-        self, seller_id: str, data_de: str, data_ate: str, status: str | None = "paid"
+        self,
+        seller_id: str,
+        data_de: str,
+        data_ate: str,
+        status: str | None = "paid",
+        campo_data: str = "date_created",
     ) -> list[dict]:
         """
         data_de/data_ate no formato 'YYYY-MM-DDTHH:MM:SS.000-00:00' (ISO 8601).
@@ -354,6 +359,14 @@ class MercadoLivreCanal:
         retorna o mesmo total que somar as buscas por status individual,
         incluindo 'cancelled') - usado por coletar_extrato_do_dia, que
         precisa ver pedidos ainda não pagos pra não perdê-los depois.
+
+        campo_data escolhe qual campo de data a janela filtra:
+        'date_created' (padrão, usado por quase tudo) ou 'date_closed'
+        (usado só por _pedidos_fechados_no_dia_brasilia, pra descobrir
+        pedidos que o relatório oficial do Mercado Livre conta num dia
+        diferente do que este projeto conta - ver coletar_referencias_pagamento_do_dia).
+        Confirmado ao vivo que a API aceita 'order.date_closed.from/to' do
+        mesmo jeito que 'order.date_created.from/to'.
         """
         pedidos: list[dict] = []
         offset = 0
@@ -361,8 +374,8 @@ class MercadoLivreCanal:
 
         params_base = {
             "seller": seller_id,
-            "order.date_created.from": data_de,
-            "order.date_created.to": data_ate,
+            f"order.{campo_data}.from": data_de,
+            f"order.{campo_data}.to": data_ate,
             "limit": limite,
         }
         if status is not None:
@@ -412,6 +425,29 @@ class MercadoLivreCanal:
     def _data_criacao_em_brasilia(pedido: dict) -> date | None:
         """Data (calendário de Brasília, -03:00) em que um pedido foi criado, a partir de date_created."""
         bruto = pedido.get("date_created")
+        if not bruto:
+            return None
+        instante = datetime.fromisoformat(bruto)
+        return (instante.astimezone(FUSO_BRASILIA)).date()
+
+    def _pedidos_fechados_no_dia_brasilia(self, seller_id: str, dia: date, status: str | None = "paid") -> list[dict]:
+        """
+        Mesmo princípio de _pedidos_do_dia_brasilia, mas filtrando por
+        date_closed (data de FECHAMENTO/pagamento) em vez de date_created -
+        confirmado ao vivo que é esse o critério que o relatório oficial do
+        Mercado Livre usa pra "quantidade de vendas"/"vendas brutas" de um
+        dia (bateu exato: 12 pedidos, 17 unidades, R$5.894 num caso real
+        testado). Usado só por coletar_referencias_pagamento_do_dia.
+        """
+        de = f"{dia.isoformat()}T00:00:00.000{FUSO_DATE_CREATED_PEDIDOS}"
+        ate = f"{(dia + timedelta(days=1)).isoformat()}T01:00:00.000{FUSO_DATE_CREATED_PEDIDOS}"
+        pedidos = self._obter_pedidos_periodo(seller_id, de, ate, status=status, campo_data="date_closed")
+        return [p for p in pedidos if self._data_fechamento_em_brasilia(p) == dia]
+
+    @staticmethod
+    def _data_fechamento_em_brasilia(pedido: dict) -> date | None:
+        """Data (calendário de Brasília, -03:00) em que um pedido foi fechado/pago, a partir de date_closed."""
+        bruto = pedido.get("date_closed")
         if not bruto:
             return None
         instante = datetime.fromisoformat(bruto)
@@ -636,6 +672,43 @@ class MercadoLivreCanal:
                     "comissao_ml": item.get("sale_fee", 0.0) * quantidade,
                     "frete_vendedor": frete_alocado,
                     "status": status,
+                })
+
+        return resultado
+
+    def coletar_referencias_pagamento_do_dia(self, dia: date) -> list[dict]:
+        """
+        Pedidos que foram FECHADOS/pagos neste dia calendário, mas CRIADOS
+        em outro dia (ex: boleto pago 1 dia depois) - o relatório oficial
+        do Mercado Livre conta esses pedidos no dia do pagamento, enquanto
+        coletar_extrato_do_dia (e o Extrato de margem) conta pela data de
+        criação (decisão consciente do usuário, mantida). Essas linhas NÃO
+        contam em nenhum total do extrato - servem só de referência, pra
+        explicar de onde vem a diferença sem precisar investigar de novo
+        (ver database/extrato_referencia.py).
+        """
+        seller_id = self.obter_id_vendedor()
+        pedidos_criados_hoje = self._pedidos_do_dia_brasilia(seller_id, dia, status=None)
+        ids_ja_contados = {str(p["id"]) for p in pedidos_criados_hoje}
+
+        pedidos_fechados = self._pedidos_fechados_no_dia_brasilia(seller_id, dia)
+
+        resultado = []
+        for pedido in pedidos_fechados:
+            pedido_id = str(pedido["id"])
+            if pedido_id in ids_ja_contados:
+                continue
+            data_criacao = self._data_criacao_em_brasilia(pedido)
+            for item in pedido.get("order_items", []):
+                quantidade = item.get("quantity", 0)
+                resultado.append({
+                    "pedido_id": pedido_id,
+                    "item_id": str(item.get("item", {}).get("id")),
+                    "sku": item.get("item", {}).get("seller_sku") or "",
+                    "titulo": item.get("item", {}).get("title", ""),
+                    "quantidade": quantidade,
+                    "preco_venda": item.get("unit_price", 0) * quantidade,
+                    "data_criacao": data_criacao.isoformat() if data_criacao else None,
                 })
 
         return resultado
