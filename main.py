@@ -23,6 +23,7 @@ from database.analisar_variacao import obter_variacao_anuncios
 from database.historico_completo import obter_datas_existentes
 from database.pedidos import salvar_pedidos_do_dia, obter_resumo as obter_resumo_pedidos
 from database.custo_produtos import sincronizar as sincronizar_custo_produtos
+from database.pedidos_bling import sincronizar as sincronizar_pedidos_bling
 from database.extrato import salvar_itens_venda_do_dia
 from database.ads import salvar_campanhas_do_dia, salvar_anuncios_do_dia, obter_resumo as obter_resumo_ads
 from database.kpis import obter_totais_periodo, obter_data_mais_recente
@@ -199,6 +200,18 @@ def _rotina_diaria() -> None:
         sincronizar_custo_produtos(produtos_bling)
     except Exception as erro:
         print(f"Falha ao sincronizar produtos do Bling: {erro}")
+
+    # Mesmo princípio, pro cruzamento de número de pedido (extrato mostra
+    # o número da venda no ML e no Bling lado a lado) - janela igual à de
+    # reconciliação do extrato, com 2 dias de folga (o pedido pode levar
+    # um pouco pra chegar no Bling depois de confirmado no ML).
+    try:
+        janela_inicio = (datetime.now().date() - timedelta(days=DIAS_JANELA_RECONCILIACAO_EXTRATO + 2)).isoformat()
+        janela_fim = datetime.now().date().isoformat()
+        pedidos_bling = BlingClient().listar_pedidos_vendas(janela_inicio, janela_fim)
+        sincronizar_pedidos_bling(pedidos_bling)
+    except Exception as erro:
+        print(f"Falha ao sincronizar pedidos do Bling: {erro}")
 
     for conta in contas:
         conta_id, canal = conta["conta_id"], conta["canal"]

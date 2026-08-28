@@ -103,6 +103,20 @@ CREATE TABLE IF NOT EXISTS custo_produtos (
 );
 """
 
+# Cache local do número de pedido do Bling, cruzado pelo pedido do
+# Mercado Livre (campo 'numeroLoja' do Bling == pedido_id do ML, quando o
+# pedido veio da integração automática ML->Bling). Não é multi-conta -
+# mesmo princípio de custo_produtos (credencial única do Bling). Ver
+# integrations/bling.py::listar_pedidos_vendas e database/pedidos_bling.py.
+CRIAR_TABELA_PEDIDOS_BLING = """
+CREATE TABLE IF NOT EXISTS pedidos_bling (
+    numero_loja     TEXT PRIMARY KEY,
+    numero_bling    TEXT,
+    id_bling        TEXT,
+    atualizado_em   TEXT
+);
+"""
+
 # Extrato diário de margem por venda (linha de pedido/SKU) - valores BRUTOS
 # capturados (preço, comissão, frete); imposto e margem são calculados na
 # consulta (database/extrato.py), não aqui, pra poder ajustar a alíquota
@@ -271,6 +285,10 @@ _MIGRACOES_COLUNA = [
     # senão o mesmo estoque físico é contado 2x (achado real testando: SKU
     # com 2 anúncios vinculados, 9 unidades reais, contado como 18).
     ("anuncios", "grupo_estoque_id", "TEXT"),
+    # Número do pedido no Bling (cruzado pelo numeroLoja == pedido_id do
+    # ML) - capturado no momento da gravação do item de venda, mesmo
+    # princípio de custo_unitario_capturado (snapshot, não JOIN dinâmico).
+    ("itens_venda", "numero_pedido_bling", "TEXT"),
 ]
 
 
@@ -298,6 +316,7 @@ def criar_tabelas() -> None:
         conexao.execute(CRIAR_TABELA_TOKENS_OAUTH)
         conexao.execute(CRIAR_TABELA_PEDIDOS)
         conexao.execute(CRIAR_TABELA_CUSTO_PRODUTOS)
+        conexao.execute(CRIAR_TABELA_PEDIDOS_BLING)
         conexao.execute(CRIAR_TABELA_ITENS_VENDA)
         conexao.execute(CRIAR_TABELA_ADS_CAMPANHAS_DIARIO)
         conexao.execute(CRIAR_TABELA_ADS_ANUNCIOS_DIARIO)
@@ -311,7 +330,7 @@ def criar_tabelas() -> None:
             "Tabelas prontas: contas, anuncios, historico_anuncios_diario, "
             "analises_diarias, tokens_oauth, pedidos, custo_produtos, itens_venda, "
             "ads_campanhas_diario, ads_anuncios_diario, analises_ads_diarias, "
-            "analises_estoque_diarias, estoque_divergencias, estoque_risco."
+            "analises_estoque_diarias, estoque_divergencias, estoque_risco, pedidos_bling."
         )
     finally:
         conexao.close()

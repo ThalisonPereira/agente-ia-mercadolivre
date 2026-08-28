@@ -22,6 +22,7 @@ from datetime import date, datetime
 from database.conexao_supabase import obter_conexao
 from database.custo_produtos import obter_custo
 from database.esquema import criar_tabelas
+from database.pedidos_bling import obter_numero_bling
 
 # Alíquota de imposto aplicada sobre o preço de venda BRUTO (confirmado
 # com o usuário - não é sobre o valor já líquido de comissão/frete).
@@ -32,12 +33,12 @@ UPSERT_ITEM_VENDA = """
 INSERT INTO itens_venda (
     conta_id, pedido_id, item_id, sku, titulo, data_venda,
     quantidade, preco_venda, comissao_ml, frete_vendedor, status,
-    custo_unitario_capturado, capturado_em
+    custo_unitario_capturado, numero_pedido_bling, capturado_em
 )
 VALUES (
     %(conta_id)s, %(pedido_id)s, %(item_id)s, %(sku)s, %(titulo)s, %(data_venda)s,
     %(quantidade)s, %(preco_venda)s, %(comissao_ml)s, %(frete_vendedor)s, %(status)s,
-    %(custo_unitario_capturado)s, %(capturado_em)s
+    %(custo_unitario_capturado)s, %(numero_pedido_bling)s, %(capturado_em)s
 )
 ON CONFLICT(conta_id, pedido_id, item_id) DO UPDATE SET
     sku = excluded.sku,
@@ -49,6 +50,7 @@ ON CONFLICT(conta_id, pedido_id, item_id) DO UPDATE SET
     frete_vendedor = excluded.frete_vendedor,
     status = excluded.status,
     custo_unitario_capturado = excluded.custo_unitario_capturado,
+    numero_pedido_bling = excluded.numero_pedido_bling,
     capturado_em = excluded.capturado_em;
 """
 
@@ -95,6 +97,10 @@ def salvar_itens_venda_do_dia(conta_id: str, itens: list[dict], dia: date | None
                 # Snapshot do custo unitário no momento da coleta (não um
                 # JOIN dinâmico na consulta) - ver esquema.py e _calcular_linha.
                 "custo_unitario_capturado": obter_custo(item.get("sku", "")),
+                # Número do pedido no Bling, cruzado pelo pedido_id (ver
+                # database/pedidos_bling.py) - None se o pedido ainda não
+                # chegou no Bling ou não veio da integração automática.
+                "numero_pedido_bling": obter_numero_bling(item["pedido_id"]),
                 "capturado_em": agora,
             })
             for item in itens
@@ -143,6 +149,7 @@ def _calcular_linha(linha) -> dict:
             "canal": linha["canal"],
             "data_venda": linha["data_venda"],
             "pedido_id": linha["pedido_id"],
+            "numero_pedido_bling": linha["numero_pedido_bling"],
             "sku": linha["sku"],
             "titulo": linha["titulo"],
             "quantidade": linha["quantidade"],
@@ -180,6 +187,7 @@ def _calcular_linha(linha) -> dict:
         "canal": linha["canal"],
         "data_venda": linha["data_venda"],
         "pedido_id": linha["pedido_id"],
+        "numero_pedido_bling": linha["numero_pedido_bling"],
         "sku": linha["sku"],
         "titulo": linha["titulo"],
         "quantidade": linha["quantidade"],
@@ -210,7 +218,7 @@ def obter_extrato(
     sql = f"""
         SELECT v.conta_id, c.canal, v.data_venda, v.pedido_id, v.sku, v.titulo, v.quantidade,
                v.preco_venda, v.comissao_ml, v.frete_vendedor, v.status,
-               v.custo_unitario_capturado
+               v.custo_unitario_capturado, v.numero_pedido_bling
         FROM itens_venda v
         LEFT JOIN contas c ON c.conta_id = v.conta_id
         WHERE v.data_venda BETWEEN %(data_inicio)s AND %(data_fim)s {filtros_extra}

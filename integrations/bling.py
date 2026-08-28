@@ -186,6 +186,55 @@ class BlingClient:
         return todos_os_produtos
 
     # ------------------------------------------------------------------
+    # Leitura de pedidos de venda (cruzamento com o pedido do Mercado Livre)
+    # ------------------------------------------------------------------
+
+    def listar_pedidos_vendas(self, data_inicial: str, data_final: str) -> list[dict]:
+        """
+        Busca os pedidos de venda do Bling criados entre data_inicial e
+        data_final (ambos 'AAAA-MM-DD', inclusive), percorrendo todas as
+        páginas. Cada pedido traz (confirmado via chamada real) 'numero'
+        (número simples do Bling, ex: 51208) e 'numeroLoja' - quando o
+        pedido veio da integração automática Mercado Livre → Bling,
+        'numeroLoja' é exatamente o mesmo pedido_id que já usamos (ex:
+        "2000014521882473"); pedidos de outros canais ou lançados
+        manualmente têm outro formato (ou 'numeroLoja' vazio) e
+        simplesmente não vão casar com nenhum item_venda nosso - sem
+        risco de casamento errado, já que a comparação é exata.
+        """
+        headers = {"Authorization": f"Bearer {self._token_valido()}"}
+        todos_os_pedidos: list[dict] = []
+        pagina = 1
+
+        while True:
+            resposta = requests.get(
+                f"{BASE_URL}/pedidos/vendas",
+                headers=headers,
+                params={
+                    "pagina": pagina,
+                    "limite": REGISTROS_POR_PAGINA,
+                    "dataInicial": data_inicial,
+                    "dataFinal": data_final,
+                },
+                timeout=15,
+            )
+
+            if resposta.status_code != 200:
+                print(f"Erro ao buscar página {pagina} de pedidos de venda (status {resposta.status_code}): {resposta.text}")
+                break
+
+            pedidos_da_pagina = resposta.json().get("data", [])
+            todos_os_pedidos.extend(pedidos_da_pagina)
+
+            if len(pedidos_da_pagina) < REGISTROS_POR_PAGINA:
+                break
+
+            pagina += 1
+            time.sleep(PAUSA_ENTRE_REQUISICOES)
+
+        return todos_os_pedidos
+
+    # ------------------------------------------------------------------
     # Gerenciamento de token (mesmo padrão de MercadoLivreCanal)
     # ------------------------------------------------------------------
 
