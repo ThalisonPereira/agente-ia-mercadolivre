@@ -482,6 +482,41 @@ class MercadoLivreCanal:
         corpo = resposta.json()
         return sum(sender.get("cost", 0.0) for sender in corpo.get("senders", []))
 
+    @staticmethod
+    def _sku_real(item: dict) -> str:
+        """
+        'seller_custom_field' (a nível do item) é um campo LEGADO da API -
+        ainda é devolvido, mas não reflete mais o SKU real/atual que
+        aparece na busca por SKU do painel do vendedor (confirmado ao vivo:
+        um anúncio com seller_custom_field='CADIT' tem o SKU real
+        'SELLER_SKU'='12030'; outro com seller_custom_field='PMGG' tem 2
+        variações com SKU real '12044'/'12067', já cadastrados e com
+        estoque no Bling - 'PMGG' nunca existiu de verdade). Usar esse
+        campo legado gera falso positivo de "SKU sem controle no Bling" e
+        falha na busca por SKU em Consultar Anúncio.
+
+        O SKU real vem de lugares diferentes dependendo do anúncio ter
+        variações ou não:
+        - Sem variações: atributo 'SELLER_SKU' (o que a API v2 mostra como
+          "SKU" no painel) a nível do item.
+        - Com variações: cada variação tem seu próprio 'seller_custom_field'
+          (aqui sim é o campo certo, por variação) - se todas as variações
+          concordam no mesmo SKU, usa esse valor; se divergem entre si ou
+          nenhuma tem SKU definido, não dá pra representar 1 SKU único
+          pra esse item_id (nosso schema é 1 SKU por item_id) - retorna
+          vazio (mesmo tratamento de "SKU desconhecido" já usado no resto
+          do projeto) em vez de arriscar um valor errado.
+        """
+        variacoes = item.get("variations") or []
+        if variacoes:
+            skus = {v.get("seller_custom_field") for v in variacoes if v.get("seller_custom_field")}
+            return skus.pop() if len(skus) == 1 else ""
+
+        for atributo in item.get("attributes", []) or []:
+            if atributo.get("id") == "SELLER_SKU" and atributo.get("value_name"):
+                return atributo["value_name"]
+        return ""
+
     # ------------------------------------------------------------------
     # Interface comum de canal
     # ------------------------------------------------------------------
@@ -518,7 +553,7 @@ class MercadoLivreCanal:
             dados_anuncios.append({
                 "item_id": item_id,
                 "titulo": item.get("title", ""),
-                "sku": item.get("seller_custom_field") or "",
+                "sku": self._sku_real(item),
                 "visitas": visitas_por_item.get(item_id, 0),
                 "vendas_quantidade": vendas["quantidade"],
                 "receita": vendas["receita"],
