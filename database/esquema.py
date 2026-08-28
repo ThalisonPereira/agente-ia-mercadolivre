@@ -262,6 +262,7 @@ CREATE TABLE IF NOT EXISTS estoque_divergencias (
     saldo_bling      INTEGER,
     diferenca        INTEGER,
     categoria        TEXT,
+    contas           TEXT,
     atualizado_em    TEXT
 );
 """
@@ -314,6 +315,12 @@ _MIGRACOES_COLUNA = [
     # ML) - capturado no momento da gravação do item de venda, mesmo
     # princípio de custo_unitario_capturado (snapshot, não JOIN dinâmico).
     ("itens_venda", "numero_pedido_bling", "TEXT"),
+    # Conta(s) (hc/wc/cc) onde o SKU divergente está publicado - sem isso o
+    # usuário não sabia em qual conta ir procurar o anúncio pra corrigir
+    # (achado real: usuário procurou o SKU na conta errada do Mercado
+    # Livre e não achou). Lista separada por vírgula (mesmo princípio
+    # simples já usado no resto do schema, sem precisar de tabela à parte).
+    ("estoque_divergencias", "contas", "TEXT"),
 ]
 
 

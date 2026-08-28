@@ -63,6 +63,7 @@ def obter_divergencias() -> list[dict]:
             g.sku,
             SUM(g.estoque_disponivel) AS soma_ml,
             COUNT(*) AS grupos_estoque,
+            STRING_AGG(DISTINCT g.conta_id, ',' ORDER BY g.conta_id) AS contas,
             MAX(cp.estoque_saldo) AS saldo_bling,
             BOOL_OR(cp.sku IS NULL) AS sem_bling
         FROM grupos g
@@ -99,6 +100,10 @@ def obter_divergencias() -> list[dict]:
             "sku": linha["sku"],
             "soma_ml": soma_ml,
             "grupos_estoque": linha["grupos_estoque"],
+            # Conta(s) (hc/wc/cc) onde esse SKU está publicado - sem isso
+            # não dava pra saber em qual conta ir procurar o anúncio no
+            # Mercado Livre pra corrigir (achado real do usuário).
+            "contas": linha["contas"],
             "saldo_bling": saldo_bling,
             "diferenca": diferenca,
             "categoria": categoria,
@@ -211,8 +216,8 @@ def salvar_divergencias(divergencias: list[dict]) -> None:
             instrucoes = [
                 (
                     "INSERT INTO estoque_divergencias "
-                    "(sku, soma_ml, grupos_estoque, saldo_bling, diferenca, categoria, atualizado_em) "
-                    "VALUES (%(sku)s, %(soma_ml)s, %(grupos_estoque)s, %(saldo_bling)s, %(diferenca)s, %(categoria)s, %(atualizado_em)s)",
+                    "(sku, soma_ml, grupos_estoque, contas, saldo_bling, diferenca, categoria, atualizado_em) "
+                    "VALUES (%(sku)s, %(soma_ml)s, %(grupos_estoque)s, %(contas)s, %(saldo_bling)s, %(diferenca)s, %(categoria)s, %(atualizado_em)s)",
                     {**d, "atualizado_em": agora},
                 )
                 for d in divergencias
