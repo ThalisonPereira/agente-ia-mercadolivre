@@ -11,9 +11,10 @@ python-dotenv==1.0.1
 gspread==6.2.1
 google-auth==2.56.2
 
-# SDK oficial da Anthropic - usado na camada de análise de IA (agents/analista_ia.py)
-# e no assistente com tool-calling (agents/assistente_ia.py, precisa do Tool Runner)
-anthropic>=0.120.0
+# SDK oficial do Gemini - usado na camada de análise de IA (agents/analista_ia.py
+# e espelhos) e no assistente com tool-calling (agents/assistente_ia.py, usa o
+# Automatic Function Calling do client.chats)
+google-genai>=2.20.0
 
 # Interface web do chat de IA (chat_app.py), hospedável de graça no Streamlit Community Cloud
 streamlit>=1.38.0

@@ -3,7 +3,7 @@ agents/analista_estoque_ia.py
 
 Camada de IA especializada em estoque: recebe as divergências Bling x
 Mercado Livre e os anúncios ranqueados em risco de pausar (já calculados
-em database/estoque.py) e usa a API da Anthropic pra gerar um alerta em
+em database/estoque.py) e usa a API do Gemini pra gerar um alerta em
 texto - só leitura/alerta, nunca escreve estoque em nenhum sistema
 externo. Espelha agents/analista_ads_ia.py.
 """
@@ -11,14 +11,15 @@ externo. Espelha agents/analista_ads_ia.py.
 from datetime import datetime
 from pathlib import Path
 
-import anthropic
+from google import genai
+from google.genai import types
 
-from config.settings import carregar_configuracao_anthropic
+from config.settings import carregar_configuracao_gemini
 from database.analises_estoque_diarias import salvar_analise_estoque
 
 CAMINHO_PROMPT = Path(__file__).resolve().parent.parent / "prompts" / "analise_estoque.md"
 
-MODELO = "claude-haiku-4-5"
+MODELO = "gemini-3.6-flash"
 
 
 def _montar_resumo_precalculado(divergencias: list[dict], em_risco: list[dict]) -> str:
@@ -67,32 +68,27 @@ def _montar_tabela_risco(em_risco: list[dict]) -> str:
 
 
 def gerar_analise_estoque(divergencias: list[dict], em_risco: list[dict], data: str) -> str:
-    """Chama a API da Anthropic e retorna a análise de estoque em texto para o dia."""
-    config = carregar_configuracao_anthropic()
-    client = anthropic.Anthropic(api_key=config.api_key)
+    """Chama a API do Gemini e retorna a análise de estoque em texto para o dia."""
+    config = carregar_configuracao_gemini()
+    client = genai.Client(api_key=config.api_key)
 
     instrucoes = CAMINHO_PROMPT.read_text(encoding="utf-8")
     resumo_precalculado = _montar_resumo_precalculado(divergencias, em_risco)
     tabela_divergencias = _montar_tabela_divergencias(divergencias)
     tabela_risco = _montar_tabela_risco(em_risco)
 
-    resposta = client.messages.create(
+    resposta = client.models.generate_content(
         model=MODELO,
-        max_tokens=2048,
-        system=instrucoes,
-        messages=[{
-            "role": "user",
-            "content": (
-                f"Estoque em {data}:\n\n"
-                f"{resumo_precalculado}\n\n"
-                f"Divergências de estoque (Bling x Mercado Livre):\n\n{tabela_divergencias}\n\n"
-                f"Anúncios ranqueados em risco de pausar:\n\n{tabela_risco}"
-            ),
-        }],
+        config=types.GenerateContentConfig(system_instruction=instrucoes, max_output_tokens=2048),
+        contents=(
+            f"Estoque em {data}:\n\n"
+            f"{resumo_precalculado}\n\n"
+            f"Divergências de estoque (Bling x Mercado Livre):\n\n{tabela_divergencias}\n\n"
+            f"Anúncios ranqueados em risco de pausar:\n\n{tabela_risco}"
+        ),
     )
 
-    texto = next((bloco.text for bloco in resposta.content if bloco.type == "text"), "")
-    return texto
+    return resposta.text or ""
 
 
 def analisar_e_salvar_estoque(divergencias: list[dict], em_risco: list[dict], data: str | None = None) -> str:

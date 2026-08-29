@@ -31,7 +31,7 @@ import streamlit as st
 
 from paginas._util_auth import exigir_login
 
-for _chave in ("ANTHROPIC_API_KEY", "SUPABASE_DB_URL"):
+for _chave in ("GEMINI_API_KEY", "SUPABASE_DB_URL"):
     if _chave in st.secrets:
         os.environ.setdefault(_chave, st.secrets[_chave])
 

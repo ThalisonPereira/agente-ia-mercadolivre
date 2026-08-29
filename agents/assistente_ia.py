@@ -15,8 +15,8 @@ com a interface.
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import anthropic
-from anthropic import beta_tool
+from google import genai
+from google.genai import types
 
 FUSO_BRASILIA = ZoneInfo("America/Sao_Paulo")
 
@@ -31,7 +31,7 @@ from database.pedidos import obter_data_mais_recente as obter_data_mais_recente_
 from database.pedidos import obter_resumo as obter_resumo_pedidos
 from database.ranking import obter_ranking
 
-MODELO = "claude-sonnet-5"
+MODELO = "gemini-3.6-flash"
 
 SYSTEM_PROMPT_BASE = """\
 Você é um assistente de e-commerce que ajuda um vendedor a entender o \
@@ -90,7 +90,6 @@ def _formatar_linhas(linhas: list[dict]) -> str:
     return "\n".join(corpo)
 
 
-@beta_tool
 def consultar_sku(
     sku_ou_titulo: str,
     data_inicio: str = "",
@@ -117,7 +116,6 @@ def consultar_sku(
     return _formatar_linhas(resultado)
 
 
-@beta_tool
 def variacao_recente(
     data_inicial: str = "", data_final: str = "", conta_id: str = "", canal: str = ""
 ) -> str:
@@ -139,7 +137,6 @@ def variacao_recente(
     return _formatar_linhas(resultado)
 
 
-@beta_tool
 def ranking_periodo(
     metrica: str,
     data_inicio: str,
@@ -166,7 +163,6 @@ def ranking_periodo(
     return _formatar_linhas(resultado)
 
 
-@beta_tool
 def ultima_analise(conta_id: str = "") -> str:
     """Retorna a análise narrativa mais recente já gerada sobre o
     desempenho dos anúncios (a "análise do dia").
@@ -183,7 +179,6 @@ def ultima_analise(conta_id: str = "") -> str:
     )
 
 
-@beta_tool
 def pedidos_do_dia(conta_id: str = "", canal: str = "") -> str:
     """Retorna quantos pedidos (vendas/transações, não unidades) entraram
     no dia mais recente coletado, e quantos estão em cada situação de
@@ -208,7 +203,6 @@ def pedidos_do_dia(conta_id: str = "", canal: str = "") -> str:
     )
 
 
-@beta_tool
 def extrato_do_dia(conta_id: str = "", canal: str = "") -> str:
     """Retorna o extrato de margem do dia mais recente coletado: total
     vendido, comissão do Mercado Livre, frete pago pelo vendedor, imposto
@@ -260,7 +254,6 @@ def extrato_do_dia(conta_id: str = "", canal: str = "") -> str:
     )
 
 
-@beta_tool
 def publicidade_do_dia(conta_id: str = "", canal: str = "") -> str:
     """Retorna o resumo de publicidade (Mercado Ads/Product Ads) do dia
     mais recente coletado: total investido, vendas atribuídas à
@@ -295,67 +288,61 @@ FERRAMENTAS = [
 
 
 def responder_pergunta(
-    pergunta: str, mensagens_api: list[dict], anthropic_api_key: str
-) -> tuple[str, list[dict], dict]:
+    pergunta: str, mensagens_api: list[types.Content], gemini_api_key: str
+) -> tuple[str, list[types.Content], dict]:
     """
     Responde uma pergunta do usuário usando o modelo com tool-calling, e
-    devolve o texto da resposta, a lista de mensagens atualizada (pra manter
-    histórico de conversa entre perguntas na mesma sessão) e um resumo do
-    consumo de tokens do turno (somado entre todas as idas e vindas de
-    ferramenta) - usado pra confirmar que o consumo é pequeno, não os ~318
-    mil tokens/pergunta do design antigo que mandava o histórico inteiro.
+    devolve o texto da resposta, o histórico de conversa atualizado (no
+    formato do Gemini - lista de types.Content, pra manter contexto entre
+    perguntas na mesma sessão) e um resumo do consumo de tokens do turno -
+    usado pra confirmar que o consumo é pequeno, não os ~318 mil
+    tokens/pergunta do design antigo que mandava o histórico inteiro.
 
-    Só a resposta final em texto de cada turno é adicionada de volta em
-    mensagens_api (não as chamadas de ferramenta intermediárias) - o Tool
-    Runner não expõe esse histórico interno pra reconstrução, e os dados
-    mudam todo dia, então não faz sentido re-enviar resultado de ferramenta
-    antigo em perguntas futuras da mesma sessão; o modelo simplesmente chama
-    a ferramenta de novo se precisar do mesmo dado, o que é barato porque os
-    resultados das ferramentas são pequenos e específicos, não um dump geral.
+    client.chats (Chat do google-genai) já implementa sozinho o loop de
+    Automatic Function Calling (AFC): passando as funções Python de
+    FERRAMENTAS diretamente como 'tools', o SDK gera o schema de cada uma
+    a partir da assinatura + docstring, executa quantas chamadas de
+    ferramenta forem necessárias, e devolve só a resposta final em texto -
+    equivalente ao Tool Runner da Anthropic usado antes da migração.
     """
-    client = anthropic.Anthropic(api_key=anthropic_api_key)
+    client = genai.Client(api_key=gemini_api_key)
 
-    historico = mensagens_api + [{"role": "user", "content": pergunta}]
-
-    runner = client.beta.messages.tool_runner(
+    chat = client.chats.create(
         model=MODELO,
-        max_tokens=4096,
-        system=_montar_system_prompt(),
-        tools=FERRAMENTAS,
-        messages=historico,
-        # Cacheia o prompt de sistema + as definições das ferramentas (que
-        # não mudam entre as idas e vindas do tool-calling de uma pergunta,
-        # nem entre perguntas seguidas da mesma sessão) - evita recobrar o
-        # preço cheio desses tokens toda vez.
-        cache_control={"type": "ephemeral"},
+        config=types.GenerateContentConfig(
+            system_instruction=_montar_system_prompt(),
+            tools=FERRAMENTAS,
+            max_output_tokens=4096,
+        ),
+        history=mensagens_api,
     )
 
-    ultima_mensagem = None
-    total_entrada = 0
-    total_saida = 0
-    numero_de_idas = 0
-    for mensagem in runner:
-        ultima_mensagem = mensagem
-        total_entrada += mensagem.usage.input_tokens
-        total_saida += mensagem.usage.output_tokens
-        numero_de_idas += 1
+    resposta = chat.send_message(pergunta)
 
-    texto = next((bloco.text for bloco in ultima_mensagem.content if bloco.type == "text"), "")
+    texto = resposta.text or ""
     if not texto:
-        texto = f"(sem resposta em texto - motivo de parada: {ultima_mensagem.stop_reason})"
+        motivo = resposta.candidates[0].finish_reason if resposta.candidates else "desconhecido"
+        texto = f"(sem resposta em texto - motivo de parada: {motivo})"
 
-    novo_historico = historico + [{"role": "assistant", "content": texto}]
-    uso = {"tokens_entrada": total_entrada, "tokens_saida": total_saida, "idas_ao_modelo": numero_de_idas}
-    return texto, novo_historico, uso
+    uso_bruto = resposta.usage_metadata
+    uso = {
+        "tokens_entrada": uso_bruto.prompt_token_count if uso_bruto else 0,
+        "tokens_saida": uso_bruto.candidates_token_count if uso_bruto else 0,
+        # Cada chamada de ferramenta automática (AFC) gera 1 ida a mais ao
+        # modelo - a lista abaixo (quando existe) registra o histórico
+        # interno completo do turno, incluindo essas idas intermediárias.
+        "idas_ao_modelo": len(resposta.automatic_function_calling_history or []) or 1,
+    }
+    return texto, chat.get_history(), uso
 
 
 if __name__ == "__main__":
     # Teste isolado, sem Streamlit: roda perguntas manuais cobrindo cada
     # ferramenta e mede o consumo de tokens de cada resposta - a prova de
     # que o novo design não repete o custo do dump completo antigo.
-    from config.settings import carregar_configuracao_anthropic
+    from config.settings import carregar_configuracao_gemini
 
-    config = carregar_configuracao_anthropic()
+    config = carregar_configuracao_gemini()
 
     perguntas_teste = [
         "Como está o desempenho da bancada gourmet ilha 120cm no último mês?",
@@ -364,7 +351,7 @@ if __name__ == "__main__":
         "Qual foi a última análise gerada?",
     ]
 
-    mensagens: list[dict] = []
+    mensagens: list[types.Content] = []
     for pergunta in perguntas_teste:
         print(f"\n{'=' * 70}\nPERGUNTA: {pergunta}\n{'=' * 70}")
         texto, mensagens, uso = responder_pergunta(pergunta, mensagens, config.api_key)

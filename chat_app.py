@@ -24,7 +24,7 @@ import os
 
 import streamlit as st
 
-for _chave in ("ANTHROPIC_API_KEY", "TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"):
+for _chave in ("GEMINI_API_KEY", "TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"):
     if _chave in st.secrets:
         os.environ.setdefault(_chave, st.secrets[_chave])
 
@@ -33,8 +33,8 @@ from agents.assistente_ia import responder_pergunta  # noqa: E402 (precisa vir d
 PERGUNTA_RESUMO_INICIAL = "Me dê um resumo objetivo da análise mais recente disponível."
 
 
-def _obter_chave_anthropic() -> str:
-    return st.secrets["ANTHROPIC_API_KEY"]
+def _obter_chave_gemini() -> str:
+    return st.secrets["GEMINI_API_KEY"]
 
 
 st.set_page_config(page_title="Assistente IA - Anúncios", page_icon="🤖")
@@ -50,7 +50,7 @@ if "mensagens" not in st.session_state:
     with st.spinner("Carregando resumo do dia..."):
         try:
             texto, mensagens_api, _uso = responder_pergunta(
-                PERGUNTA_RESUMO_INICIAL, [], _obter_chave_anthropic()
+                PERGUNTA_RESUMO_INICIAL, [], _obter_chave_gemini()
             )
         except Exception as erro:
             texto = f"Não consegui carregar o resumo automático: {erro}"
@@ -73,7 +73,7 @@ if pergunta:
         with st.spinner("Consultando os dados..."):
             try:
                 resposta, mensagens_api, _uso = responder_pergunta(
-                    pergunta, st.session_state.mensagens_api, _obter_chave_anthropic()
+                    pergunta, st.session_state.mensagens_api, _obter_chave_gemini()
                 )
                 st.session_state.mensagens_api = mensagens_api
             except Exception as erro:

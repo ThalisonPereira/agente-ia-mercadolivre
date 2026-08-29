@@ -22,8 +22,8 @@ from agents.assistente_ia import responder_pergunta
 from database.analises_diarias import obter_ultima_analise
 
 
-def _obter_chave_anthropic() -> str:
-    return st.secrets["ANTHROPIC_API_KEY"]
+def _obter_chave_gemini() -> str:
+    return st.secrets["GEMINI_API_KEY"]
 
 
 st.title("🤖 Assistente IA")
@@ -59,7 +59,7 @@ if pergunta:
         with st.spinner("Consultando os dados..."):
             try:
                 resposta, mensagens_api, _uso = responder_pergunta(
-                    pergunta, st.session_state.mensagens_api, _obter_chave_anthropic()
+                    pergunta, st.session_state.mensagens_api, _obter_chave_gemini()
                 )
                 st.session_state.mensagens_api = mensagens_api
             except Exception as erro:

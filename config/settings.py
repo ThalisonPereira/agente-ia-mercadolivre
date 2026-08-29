@@ -94,15 +94,15 @@ def carregar_configuracao_sheets() -> GoogleSheetsConfig:
 
 
 @dataclass(frozen=True)
-class AnthropicConfig:
-    """Credenciais da API da Anthropic, usada pela análise de IA."""
+class GeminiConfig:
+    """Credenciais da API do Gemini, usada pela análise de IA e pelo assistente de chat."""
 
     api_key: str
 
 
-def carregar_configuracao_anthropic() -> AnthropicConfig:
-    """Lê e valida a chave de API da Anthropic."""
-    return AnthropicConfig(api_key=_obter_variavel_obrigatoria("ANTHROPIC_API_KEY"))
+def carregar_configuracao_gemini() -> GeminiConfig:
+    """Lê e valida a chave de API do Gemini."""
+    return GeminiConfig(api_key=_obter_variavel_obrigatoria("GEMINI_API_KEY"))
 
 
 @dataclass(frozen=True)

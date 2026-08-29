@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 
 from config.settings import (
     carregar_configuracao_sheets,
-    carregar_configuracao_anthropic,
+    carregar_configuracao_gemini,
     ConfiguracaoInvalidaError,
 )
 from integrations.canais import obter_adaptador
@@ -127,10 +127,10 @@ def _testar_configuracao() -> None:
         print(f"Erro de configuração (Sheets): {erro}")
 
     try:
-        carregar_configuracao_anthropic()
-        print("Configuração da Anthropic carregada com sucesso.")
+        carregar_configuracao_gemini()
+        print("Configuração do Gemini carregada com sucesso.")
     except ConfiguracaoInvalidaError as erro:
-        print(f"Erro de configuração (Anthropic): {erro}")
+        print(f"Erro de configuração (Gemini): {erro}")
 
     contas = obter_contas_ativas()
     if not contas:
