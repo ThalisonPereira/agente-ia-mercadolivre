@@ -263,19 +263,25 @@ def _rotina_diaria() -> None:
         except Exception as erro:
             print(f"[conta: {conta_id}] Falha ao coletar publicidade: {erro}")
 
-        variacao = obter_variacao_anuncios(conta_id=conta_id)
-        if variacao is None:
-            print(f"[conta: {conta_id}] Ainda não há snapshots suficientes para comparar (precisa de pelo menos 2 dias de histórico).")
-            continue
+        try:
+            variacao = obter_variacao_anuncios(conta_id=conta_id)
+            if variacao is None:
+                print(f"[conta: {conta_id}] Ainda não há snapshots suficientes para comparar (precisa de pelo menos 2 dias de histórico).")
+            else:
+                # Cada conta publica na sua própria aba ("Dados - <conta_id>",
+                # "Análise IA - <conta_id>") - várias contas ativas não
+                # sobrescrevem a publicação umas das outras.
+                publicar_resultado_no_sheets(variacao, conta_id)
 
-        # Cada conta publica na sua própria aba ("Dados - <conta_id>",
-        # "Análise IA - <conta_id>") - várias contas ativas não sobrescrevem
-        # a publicação umas das outras.
-        publicar_resultado_no_sheets(variacao, conta_id)
-
-        data_str = dia.isoformat()
-        texto_analise = analisar_e_salvar(variacao, data_str, conta_id=conta_id)
-        publicar_analise_no_sheets(texto_analise, data_str, conta_id)
+                data_str = dia.isoformat()
+                texto_analise = analisar_e_salvar(variacao, data_str, conta_id=conta_id)
+                publicar_analise_no_sheets(texto_analise, data_str, conta_id)
+        except Exception as erro:
+            # Isolado (mesmo princípio dos outros blocos do loop) - achado
+            # real: sem isso, uma falha aqui (ex: créditos da Anthropic
+            # esgotados) derrubava a rotina inteira, pulando as contas
+            # seguintes E o bloco de estoque que roda depois do loop.
+            print(f"[conta: {conta_id}] Falha ao gerar/publicar a análise de variação: {erro}")
 
     # Depois do loop por conta (só faz sentido comparar estoque com as 3
     # contas já atualizadas nesta rodada) - estoque é compartilhado pelas
