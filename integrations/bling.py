@@ -33,9 +33,13 @@ import requests
 from config.settings import BlingConfig, carregar_configuracao_bling
 from database.tokens_oauth import obter_token, salvar_token
 
-AUTHORIZE_URL = "https://www.bling.com.br/Api/v3/oauth/authorize"
-TOKEN_URL = "https://www.bling.com.br/Api/v3/oauth/token"
-BASE_URL = "https://www.bling.com.br/Api/v3"
+# www.bling.com.br foi bloqueado pelo próprio Bling pra chamadas de API
+# (confirmado ao vivo: 403 FORBIDDEN, "A URL 'www.bling.com.br' está
+# bloqueada para requisições de API... utilize o endpoint oficial") -
+# api.bling.com.br é o host correto/atual.
+AUTHORIZE_URL = "https://api.bling.com.br/Api/v3/oauth/authorize"
+TOKEN_URL = "https://api.bling.com.br/Api/v3/oauth/token"
+BASE_URL = "https://api.bling.com.br/Api/v3"
 
 # Chave fixa em tokens_oauth - o Bling não é uma "conta" de venda, é uma
 # credencial única compartilhada por toda a operação.
