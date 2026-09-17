@@ -546,6 +546,17 @@ class MercadoLivreCanal:
                 registro["quantidade"] += quantidade
                 registro["receita"] += valor
 
+        # Item que vendeu no dia mas não está mais ativo no momento da coleta
+        # (ex: esgotou o estoque e pausou entre a venda e a rotina rodar) -
+        # sem isso, a venda desaparece silenciosamente da Visão
+        # Geral/Ranking/Variação (que só olham anúncios ativos), enquanto o
+        # Extrato de margem (lê direto do pedido, não filtra por status do
+        # anúncio) continua certo - achado real: item pausado por estoque
+        # zerado sumiu com R$7.421 de receita de um único dia.
+        ids_vendidos_mas_inativos = set(vendas_por_item) - {str(d["id"]) for d in detalhes}
+        if ids_vendidos_mas_inativos:
+            detalhes = detalhes + self._obter_detalhes_itens(list(ids_vendidos_mas_inativos))
+
         dados_anuncios = []
         for item in detalhes:
             item_id = str(item["id"])
