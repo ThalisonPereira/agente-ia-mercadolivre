@@ -3,6 +3,8 @@ Agente de IA para E-commerce (multi-conta/multi-canal) - Ponto de entrada princi
 """
 
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from config.settings import (
@@ -32,6 +34,7 @@ from database.estoque import obter_divergencias, obter_anuncios_em_risco, salvar
 from agents.analista_ia import analisar_e_salvar
 from agents.analista_ads_ia import analisar_e_salvar_ads
 from agents.analista_estoque_ia import analisar_e_salvar_estoque
+from instrumentacao import Metricas
 
 # Quantos dias pra trás a rotina diária reprocessa o extrato de vendas (não
 # só "ontem"). Necessário porque um pedido pode ficar "pendente" (aguardando
@@ -140,7 +143,7 @@ def _testar_configuracao() -> None:
         print(f"{len(contas)} conta(s) ativa(s): {resumo}")
 
 
-def _coletar_dados_do_dia(conta_id: str, canal: str) -> tuple[list[dict], date]:
+def _coletar_dados_do_dia(conta_id: str, canal: str, metricas=None, adaptador=None) -> tuple[list[dict], date]:
     """
     Busca no canal os anúncios ativos, visitas e vendas de ontem (dia
     calendário completo), pra uma conta específica.
@@ -151,8 +154,19 @@ def _coletar_dados_do_dia(conta_id: str, canal: str) -> tuple[list[dict], date]:
     uma vez por dia, mas rotular pelo dia real evita duplicidade caso o
     comando seja rodado mais de uma vez no mesmo dia, como aconteceu em
     testes).
+
+    `metricas` (opcional) é a instrumentação TEMPORÁRIA da Fase 1 (ver
+    instrumentacao.py) - omitida (None, padrão), o comportamento é idêntico
+    ao de antes dela existir.
+
+    `adaptador` (opcional) permite reaproveitar uma instância já criada
+    (ver _processar_conta - uma instância por conta, pra que o cache de
+    token/_tokens_cache sobreviva entre os blocos) em vez de criar uma nova
+    aqui. Omitido (None, padrão), cria uma instância nova como sempre fez -
+    usado pelo comando CLI 'coletar_snapshot', que não tem instância prévia.
     """
-    adaptador = obter_adaptador(conta_id, canal)
+    if adaptador is None:
+        adaptador = obter_adaptador(conta_id, canal, metricas=metricas)
     ontem = datetime.now().date() - timedelta(days=1)
     dados = adaptador.coletar_dados_do_dia(ontem)
     return dados, ontem
@@ -181,125 +195,263 @@ def _backfill_periodo(conta_id: str, canal: str, data_inicio: date, data_fim: da
         dia_atual += timedelta(days=1)
 
 
-def _rotina_diaria() -> None:
+@dataclass
+class ResultadoConta:
     """
-    Executa o pipeline completo pra todas as contas ativas cadastradas:
-    coleta -> snapshot -> comparação -> Sheets -> análise de IA.
+    Resultado do processamento de UMA conta (_processar_conta) - torna a
+    falha de uma conta observável pra quem chama (_rotina_diaria), em vez
+    de só imprimir no console e seguir como se nada tivesse acontecido.
 
-    Cada conta é processada de forma independente - se uma falhar (ex:
-    canal ainda não implementado, token expirado), as demais continuam.
+    `sucesso=False` só quando pelo menos um bloco levantou uma exceção
+    genuína (não NotImplementedError - canal ainda não implementado é uma
+    condição esperada, não uma falha). `etapa`/`erro` guardam a PRIMEIRA
+    falha encontrada, mesmo que blocos seguintes também tenham falhado
+    (isolamento entre blocos é preservado - um bloco falhar não impede os
+    seguintes de rodar, só o primeiro erro é reportado como motivo).
     """
-    contas = obter_contas_ativas()
-    if not contas:
-        print("Nenhuma conta ativa cadastrada. Rode 'python main.py cadastrar_conta <id> <canal> <nome>' primeiro.")
-        return
+    conta_id: str
+    sucesso: bool
+    etapa: str | None = None
+    erro: str | None = None
 
-    # O Bling não é por conta (credencial única, ver integrations/bling.py) -
-    # sincroniza o custo de produto 1x por rodada, antes do loop por conta.
-    try:
-        produtos_bling = BlingClient().listar_produtos()
-        sincronizar_custo_produtos(produtos_bling)
-    except Exception as erro:
-        print(f"Falha ao sincronizar produtos do Bling: {erro}")
 
-    # Mesmo princípio, pro cruzamento de número de pedido (extrato mostra
-    # o número da venda no ML e no Bling lado a lado) - janela igual à de
-    # reconciliação do extrato, com 2 dias de folga (o pedido pode levar
-    # um pouco pra chegar no Bling depois de confirmado no ML).
-    try:
-        janela_inicio = (datetime.now().date() - timedelta(days=DIAS_JANELA_RECONCILIACAO_EXTRATO + 2)).isoformat()
-        janela_fim = datetime.now().date().isoformat()
-        pedidos_bling = BlingClient().listar_pedidos_vendas(janela_inicio, janela_fim)
-        sincronizar_pedidos_bling(pedidos_bling)
-    except Exception as erro:
-        print(f"Falha ao sincronizar pedidos do Bling: {erro}")
+def _processar_conta(conta_id: str, canal: str, metricas: Metricas) -> ResultadoConta:
+    """
+    Processa o pipeline completo de UMA conta: coleta/snapshot -> pedidos ->
+    extrato+referências -> Ads -> variação/análise de IA/Sheets.
 
-    for conta in contas:
-        conta_id, canal = conta["conta_id"], conta["canal"]
-        print(f"\n=== Conta: {conta_id} ({canal}) ===")
+    Fluxo INTERNO 100% sequencial (igual desde a Fase 2 de concorrência
+    entre contas) - nenhuma regra de negócio, ordem de chamada ou
+    tratamento de exceção por bloco foi alterada aqui.
 
+    UMA ÚNICA instância de MercadoLivreCanal (`adaptador`) é criada no
+    início e reaproveitada em todos os blocos desta conta - antes, cada
+    bloco chamava obter_adaptador() de novo, criando uma instância nova
+    (e um _tokens_cache vazio) a cada vez, descartando o cache de token
+    entre blocos da MESMA conta. Reaproveitar a instância deixa
+    _tokens_cache valer durante toda a conta, reduzindo checagens/
+    renovações redundantes de token - sem mudar nada do fluxo OAuth em si
+    (mesmo _token_valido/_tokens_lock, ver mercado_livre.py).
+
+    Nunca compartilha essa instância com outra conta: cada chamada a
+    _processar_conta cria a sua própria, usada só dentro desta
+    função/thread - o token OAuth de uma conta nunca é tocado por mais de
+    uma thread ao mesmo tempo (isso já era verdade antes; continua sendo).
+    """
+    print(f"\n=== Conta: {conta_id} ({canal}) ===")
+    adaptador = obter_adaptador(conta_id, canal, metricas=metricas)
+
+    primeira_falha: tuple[str, str] | None = None
+
+    def _registrar_falha(etapa: str, erro: Exception) -> None:
+        nonlocal primeira_falha
+        if primeira_falha is None:
+            primeira_falha = (etapa, str(erro))
+
+    with metricas.medir_conta(conta_id):
         try:
-            dados, dia = _coletar_dados_do_dia(conta_id, canal)
+            with metricas.medir_bloco(conta_id, "coleta_dados_dia"):
+                dados, dia = _coletar_dados_do_dia(conta_id, canal, metricas=metricas, adaptador=adaptador)
+                capturar_snapshot_diario(conta_id, dados, dia)
         except NotImplementedError as erro:
             print(f"[conta: {conta_id}] {erro}")
-            continue
+            return ResultadoConta(conta_id, sucesso=True)
         except Exception as erro:
             print(f"[conta: {conta_id}] Falha ao coletar dados: {erro}")
-            continue
-
-        capturar_snapshot_diario(conta_id, dados, dia)
+            _registrar_falha("coleta_dados_dia", erro)
+            return ResultadoConta(conta_id, sucesso=False, etapa=primeira_falha[0], erro=primeira_falha[1])
 
         try:
-            pedidos = obter_adaptador(conta_id, canal).coletar_pedidos_do_dia(dia)
-            salvar_pedidos_do_dia(conta_id, pedidos, dia)
+            with metricas.medir_bloco(conta_id, "pedidos"):
+                pedidos = adaptador.coletar_pedidos_do_dia(dia)
+                salvar_pedidos_do_dia(conta_id, pedidos, dia)
         except NotImplementedError as erro:
             print(f"[conta: {conta_id}] {erro}")
         except Exception as erro:
             print(f"[conta: {conta_id}] Falha ao coletar pedidos: {erro}")
+            _registrar_falha("pedidos", erro)
 
         try:
-            adaptador_extrato = obter_adaptador(conta_id, canal)
             for offset in range(DIAS_JANELA_RECONCILIACAO_EXTRATO):
                 dia_reconciliacao = dia - timedelta(days=offset)
-                itens_venda = adaptador_extrato.coletar_extrato_do_dia(dia_reconciliacao)
-                salvar_itens_venda_do_dia(conta_id, itens_venda, dia_reconciliacao)
-                referencias = adaptador_extrato.coletar_referencias_pagamento_do_dia(dia_reconciliacao)
-                salvar_referencias_do_dia(conta_id, referencias, dia_reconciliacao)
+                with metricas.medir_bloco(conta_id, "extrato"):
+                    itens_venda = adaptador.coletar_extrato_do_dia(dia_reconciliacao)
+                    salvar_itens_venda_do_dia(conta_id, itens_venda, dia_reconciliacao)
+                with metricas.medir_bloco(conta_id, "referencias_pagamento"):
+                    referencias = adaptador.coletar_referencias_pagamento_do_dia(dia_reconciliacao)
+                    salvar_referencias_do_dia(conta_id, referencias, dia_reconciliacao)
         except NotImplementedError as erro:
             print(f"[conta: {conta_id}] {erro}")
         except Exception as erro:
             print(f"[conta: {conta_id}] Falha ao coletar extrato de vendas: {erro}")
+            _registrar_falha("extrato", erro)
 
         try:
-            adaptador_ads = obter_adaptador(conta_id, canal)
-            campanhas_ads = adaptador_ads.coletar_campanhas_ads_do_dia(dia)
-            salvar_campanhas_do_dia(conta_id, campanhas_ads, dia)
-            anuncios_ads = adaptador_ads.coletar_anuncios_ads_do_dia(dia)
-            salvar_anuncios_do_dia(conta_id, anuncios_ads, dia)
+            with metricas.medir_bloco(conta_id, "ads"):
+                campanhas_ads = adaptador.coletar_campanhas_ads_do_dia(dia)
+                salvar_campanhas_do_dia(conta_id, campanhas_ads, dia)
+                anuncios_ads = adaptador.coletar_anuncios_ads_do_dia(dia)
+                salvar_anuncios_do_dia(conta_id, anuncios_ads, dia)
             if campanhas_ads:
-                analisar_e_salvar_ads(campanhas_ads, dia.isoformat(), conta_id=conta_id)
+                with metricas.medir_bloco(conta_id, "ads_analise_gemini"):
+                    analisar_e_salvar_ads(campanhas_ads, dia.isoformat(), conta_id=conta_id)
         except NotImplementedError as erro:
             print(f"[conta: {conta_id}] {erro}")
         except Exception as erro:
             print(f"[conta: {conta_id}] Falha ao coletar publicidade: {erro}")
+            _registrar_falha("ads", erro)
 
         try:
-            variacao = obter_variacao_anuncios(conta_id=conta_id)
+            with metricas.medir_bloco(conta_id, "variacao"):
+                variacao = obter_variacao_anuncios(conta_id=conta_id)
             if variacao is None:
                 print(f"[conta: {conta_id}] Ainda não há snapshots suficientes para comparar (precisa de pelo menos 2 dias de histórico).")
             else:
                 # Cada conta publica na sua própria aba ("Dados - <conta_id>",
                 # "Análise IA - <conta_id>") - várias contas ativas não
                 # sobrescrevem a publicação umas das outras.
-                publicar_resultado_no_sheets(variacao, conta_id)
+                with metricas.medir_bloco(conta_id, "sheets_publicar"):
+                    publicar_resultado_no_sheets(variacao, conta_id)
 
                 data_str = dia.isoformat()
-                texto_analise = analisar_e_salvar(variacao, data_str, conta_id=conta_id)
-                publicar_analise_no_sheets(texto_analise, data_str, conta_id)
+                with metricas.medir_bloco(conta_id, "analise_gemini"):
+                    texto_analise = analisar_e_salvar(variacao, data_str, conta_id=conta_id)
+                with metricas.medir_bloco(conta_id, "sheets_publicar"):
+                    publicar_analise_no_sheets(texto_analise, data_str, conta_id)
         except Exception as erro:
-            # Isolado (mesmo princípio dos outros blocos do loop) - achado
-            # real: sem isso, uma falha aqui (ex: créditos da Anthropic
-            # esgotados) derrubava a rotina inteira, pulando as contas
-            # seguintes E o bloco de estoque que roda depois do loop.
+            # Isolado (mesmo princípio dos outros blocos) - achado real: sem
+            # isso, uma falha aqui (ex: créditos da Anthropic esgotados)
+            # derrubava a rotina inteira, pulando as contas seguintes E o
+            # bloco de estoque que roda depois do loop.
             print(f"[conta: {conta_id}] Falha ao gerar/publicar a análise de variação: {erro}")
+            _registrar_falha("variacao", erro)
 
-    # Depois do loop por conta (só faz sentido comparar estoque com as 3
-    # contas já atualizadas nesta rodada) - estoque é compartilhado pelas
-    # contas, então é uma análise única "geral", não por conta.
-    try:
-        divergencias = obter_divergencias()
-        em_risco = obter_anuncios_em_risco()
-        # Sobrescreve o snapshot mesmo quando vazio - um SKU que deixou de
-        # divergir não pode ficar preso na tabela com dado velho (ver
-        # database/estoque.py::salvar_divergencias).
-        salvar_divergencias(divergencias)
-        salvar_risco(em_risco)
-        if divergencias or em_risco:
-            analisar_e_salvar_estoque(divergencias, em_risco, datetime.now().date().isoformat())
-        else:
-            print("Estoque: nenhuma divergência nem anúncio ranqueado em risco hoje.")
-    except Exception as erro:
-        print(f"Falha ao analisar estoque: {erro}")
+    if primeira_falha is None:
+        return ResultadoConta(conta_id, sucesso=True)
+    return ResultadoConta(conta_id, sucesso=False, etapa=primeira_falha[0], erro=primeira_falha[1])
+
+
+def _rotina_diaria() -> bool:
+    """
+    Executa o pipeline completo pra todas as contas ativas cadastradas:
+    coleta -> snapshot -> comparação -> Sheets -> análise de IA.
+
+    Fase 2 (concorrência entre contas, ver auditoria de concorrência e o
+    plano desta sessão): HC/WC/CC rodam em threads separadas (uma por
+    conta, ThreadPoolExecutor de até 3 workers) - cada conta continua
+    100% sequencial internamente (ver _processar_conta), e uma conta
+    falhando não afeta as outras nem o bloco de estoque compartilhado, que
+    só começa depois que as 3 tiverem terminado (ver comentário abaixo).
+
+    Inclui instrumentação TEMPORÁRIA de medição (Fase 1, ver
+    instrumentacao.py) - mede tempo por conta/bloco e conta chamadas HTTP
+    ao Mercado Livre, sem mudar nenhum comportamento funcional. O relatório
+    é só impresso no console ao final, não é gravado em nenhuma tabela.
+
+    Retorna True se todas as contas processadas tiveram sucesso (ou não
+    havia conta cadastrada - não é uma falha, é um estado válido), False se
+    uma ou mais contas falharam - usado pelo chamador (bloco
+    '__main__') pra decidir o exit code do processo. A decisão fica
+    centralizada aqui/no chamador, não espalhada em sys.exit() pelo meio
+    do código.
+    """
+    metricas = Metricas()
+    resultados: list[ResultadoConta] = []
+
+    with metricas.medir_rotina():
+        contas = obter_contas_ativas()
+        if not contas:
+            print("Nenhuma conta ativa cadastrada. Rode 'python main.py cadastrar_conta <id> <canal> <nome>' primeiro.")
+            return True
+
+        # O Bling não é por conta (credencial única, ver integrations/bling.py) -
+        # sincroniza o custo de produto 1x por rodada, antes do loop por conta.
+        try:
+            with metricas.medir_etapa_geral("bling_custo_produtos"):
+                produtos_bling = BlingClient().listar_produtos()
+                sincronizar_custo_produtos(produtos_bling)
+        except Exception as erro:
+            print(f"Falha ao sincronizar produtos do Bling: {erro}")
+
+        # Mesmo princípio, pro cruzamento de número de pedido (extrato mostra
+        # o número da venda no ML e no Bling lado a lado) - janela igual à de
+        # reconciliação do extrato, com 2 dias de folga (o pedido pode levar
+        # um pouco pra chegar no Bling depois de confirmado no ML).
+        try:
+            with metricas.medir_etapa_geral("bling_pedidos_vendas"):
+                janela_inicio = (datetime.now().date() - timedelta(days=DIAS_JANELA_RECONCILIACAO_EXTRATO + 2)).isoformat()
+                janela_fim = datetime.now().date().isoformat()
+                pedidos_bling = BlingClient().listar_pedidos_vendas(janela_inicio, janela_fim)
+                sincronizar_pedidos_bling(pedidos_bling)
+        except Exception as erro:
+            print(f"Falha ao sincronizar pedidos do Bling: {erro}")
+
+        # Cada conta processada numa thread própria (_processar_conta) - a
+        # ordem de HC/WC/CC não é garantida pela query (sem ORDER BY em
+        # obter_contas_ativas) nem pela ordem de conclusão das threads; a
+        # instrumentação mede por conta_id, não por posição/ordem, então
+        # funciona igual não importa a ordem ou o entrelaçamento real.
+        #
+        # O `with ThreadPoolExecutor` só libera a execução (segue pro bloco
+        # de estoque abaixo) depois que TODAS as tasks submetidas
+        # terminarem (shutdown(wait=True) implícito no __exit__) - reforçado
+        # pelo `for/as_completed` explícito logo abaixo, que bloqueia até
+        # cada uma terminar. Ou seja: estoque_pos_loop só roda depois que
+        # as 3 contas tiverem terminado (com sucesso ou falha).
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futuros = {
+                executor.submit(_processar_conta, conta["conta_id"], conta["canal"], metricas): conta["conta_id"]
+                for conta in contas
+            }
+            for futuro in as_completed(futuros):
+                conta_id = futuros[futuro]
+                try:
+                    resultados.append(futuro.result())
+                except Exception as erro:
+                    # Rede de segurança: _processar_conta já trata os erros
+                    # esperados internamente (canal não implementado, falha
+                    # de coleta/pedidos/extrato/publicidade/análise) e
+                    # SEMPRE retorna um ResultadoConta - isso só pega algo
+                    # realmente inesperado que escapou de todo o try/except
+                    # interno (ex: bug no próprio _processar_conta), sem
+                    # derrubar as outras contas nem o bloco de estoque
+                    # abaixo. Continua contando como falha da conta, não
+                    # desaparece silenciosamente do resultado final.
+                    print(f"[conta: {conta_id}] Falha inesperada não tratada durante o processamento: {erro}")
+                    resultados.append(ResultadoConta(conta_id, sucesso=False, etapa="inesperado", erro=str(erro)))
+
+        # Depois do loop por conta (só faz sentido comparar estoque com as 3
+        # contas já atualizadas nesta rodada) - estoque é compartilhado pelas
+        # contas, então é uma análise única "geral", não por conta.
+        try:
+            with metricas.medir_etapa_geral("estoque_pos_loop"):
+                divergencias = obter_divergencias()
+                em_risco = obter_anuncios_em_risco()
+                # Sobrescreve o snapshot mesmo quando vazio - um SKU que deixou de
+                # divergir não pode ficar preso na tabela com dado velho (ver
+                # database/estoque.py::salvar_divergencias).
+                salvar_divergencias(divergencias)
+                salvar_risco(em_risco)
+                if divergencias or em_risco:
+                    analisar_e_salvar_estoque(divergencias, em_risco, datetime.now().date().isoformat())
+                else:
+                    print("Estoque: nenhuma divergência nem anúncio ranqueado em risco hoje.")
+        except Exception as erro:
+            print(f"Falha ao analisar estoque: {erro}")
+
+    print("\n" + metricas.relatorio())
+
+    contas_com_falha = [r for r in resultados if not r.sucesso]
+    if contas_com_falha:
+        print("\n" + "=" * 78)
+        print(f"RESUMO: {len(contas_com_falha)}/{len(resultados)} conta(s) com falha nesta execução")
+        print("=" * 78)
+        for r in contas_com_falha:
+            print(f"  [conta: {r.conta_id}] falhou na etapa '{r.etapa}': {r.erro}")
+        print("=" * 78)
+        return False
+
+    return True
 
 
 if __name__ == "__main__":
@@ -380,7 +532,14 @@ if __name__ == "__main__":
                       f"vendas {linha['vendas']} ({linha['variacao_vendas']}%) - {linha['status']}")
 
     elif comando == "rotina_diaria":
-        _rotina_diaria()
+        # Decisão de exit code centralizada aqui (único lugar do arquivo
+        # que chama sys.exit) - _rotina_diaria()/_processar_conta() só
+        # devolvem o resultado (bool/ResultadoConta), não decidem o exit
+        # code sozinhas. GitHub Actions (ou qualquer runner) passa a
+        # marcar o job como falho quando uma ou mais contas falharem,
+        # em vez de sempre "success" independente do resultado real.
+        sucesso = _rotina_diaria()
+        sys.exit(0 if sucesso else 1)
 
     else:
         print("Uso: python main.py [config|cadastrar_conta <id> <canal> <nome>|"

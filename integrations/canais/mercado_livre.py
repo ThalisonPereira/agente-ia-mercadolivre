@@ -11,14 +11,18 @@ mais num arquivo local - importante pra funcionar tanto na coleta local
 quanto numa futura automação rodando na nuvem).
 """
 
+import random
 import secrets
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import requests
 
-from config.settings import MercadoLivreConfig, carregar_configuracao_ml
+from config.settings import MercadoLivreConfig, carregar_configuracao_ml, obter_workers_visitas
 from database.tokens_oauth import obter_token, salvar_token
 
 AUTHORIZE_URL = "https://auth.mercadolivre.com.br/authorization"
@@ -28,11 +32,35 @@ BASE_URL = "https://api.mercadolibre.com"
 # A API do Mercado Livre limita a 20 ids por chamada nos endpoints multiget (itens).
 TAMANHO_LOTE = 20
 
-# Pausa entre cada chamada de /items/{id}/visits (feita 1 item por vez) para
-# não estourar o rate limit da API em coletas grandes.
+# Pausa entre cada chamada de /items/{id}/visits no modo legado (sequencial,
+# VISITAS_MAX_WORKERS=1) - ver _obter_visitas_itens. No modo concorrente
+# (padrão, Fase 3) essa pausa não é usada; a proteção contra rate limit vem
+# do limite de workers simultâneos + do retry/backoff de _get_com_retry.
 PAUSA_ENTRE_VISITAS_SEGUNDOS = 0.3
 
+# Fase 3 - se a PROPORÇÃO de itens que falharam ao coletar visita (erro/
+# timeout, não zero real) passar deste limiar, _obter_visitas_itens levanta
+# exceção (aborta a coleta da conta) em vez de seguir com sucesso parcial -
+# preserva o comportamento de "erro óbvio" de antes da Fase 3 para uma
+# degradação generalizada (ex: token inválido, rate limit em cascata),
+# tolerando só falhas isoladas/pontuais.
+LIMITE_FALHA_VISITAS_ABORTA = 0.2
+
 MAX_TENTATIVAS_RATE_LIMIT = 5
+
+# Retry específico pra renovação de token OAuth (_renovar_tokens) -
+# separado de MAX_TENTATIVAS_RATE_LIMIT porque é uma chamada única (POST),
+# não um loop de itens, e a Fase 2 (concorrência entre contas) pode fazer
+# 3 contas renovarem token quase ao mesmo tempo (mesmo IP/runner),
+# acionando um rate limit do próprio endpoint de OAuth do Mercado Livre
+# (observado em produção: HTTP 429 com corpo contendo "local_rate_limited")
+# que a versão sequencial antiga nunca acionava. Só cobre erro transitório
+# (429/5xx/conexão) - erro permanente (ex: refresh_token inválido, 400/401)
+# continua falhando na 1ª tentativa, sem retry.
+MAX_TENTATIVAS_RENOVACAO_TOKEN = 5
+BACKOFF_INICIAL_RENOVACAO_SEGUNDOS = 1.0
+BACKOFF_MAXIMO_RENOVACAO_SEGUNDOS = 30.0
+JITTER_MAXIMO_RENOVACAO_SEGUNDOS = 1.0
 
 # Margem de segurança: renovamos o token um pouco antes dele expirar de
 # verdade, para nunca correr o risco de uma chamada cair bem no instante da
@@ -67,7 +95,7 @@ def _em_lotes(itens: list, tamanho: int = TAMANHO_LOTE):
 class MercadoLivreCanal:
     """Adaptador do Mercado Livre para uma conta específica."""
 
-    def __init__(self, conta_id: str):
+    def __init__(self, conta_id: str, metricas=None):
         self.conta_id = conta_id
         self._config: MercadoLivreConfig = carregar_configuracao_ml(conta_id)
         # Cache do token em memória, pra não abrir uma conexão nova com o
@@ -75,12 +103,28 @@ class MercadoLivreCanal:
         # coletas com muitas chamadas seguidas (ex: backfill de vários dias),
         # onde consultar o banco por item esgotava as conexões do pooler.
         self._tokens_cache: dict | None = None
+        # Fase 3 - protege a sequência leitura-decisão-renovação de
+        # _token_valido() quando chamadas da MESMA conta rodam em threads
+        # paralelas (coleta de visitas). Sem isso, duas threads poderiam ver
+        # o token como expirado ao mesmo tempo e renovar 2x - o Mercado
+        # Livre invalida o refresh_token anterior a cada renovação, então a
+        # segunda renovação usaria um refresh_token já invalidado pela
+        # primeira. Contas diferentes (Fase 2) não competem por este lock
+        # (cada instância de MercadoLivreCanal tem o seu).
+        self._tokens_lock = threading.Lock()
         # Sessão HTTP reaproveitada entre chamadas (keep-alive) - sem isso,
         # cada requisição abre uma conexão TCP/TLS nova, o que degrada
         # visivelmente ao longo de uma coleta com centenas de chamadas
         # seguidas (ex: visitas por item numa conta com muitos anúncios),
         # deixando dezenas de conexões em TIME_WAIT e piorando a cada request.
         self._sessao = requests.Session()
+        # Instrumentação TEMPORÁRIA de medição (Fase 1 - ver instrumentacao.py
+        # e a auditoria de concorrência desta sessão). None (padrão) mantém
+        # o comportamento idêntico ao de antes dessa instrumentação existir -
+        # nenhum chamador que não passe `metricas` é afetado.
+        self._metricas = metricas
+        if self._metricas is not None:
+            self._metricas.registrar_instancia_canal(self.conta_id)
 
     # ------------------------------------------------------------------
     # Fluxo de autorização OAuth2 (equivalente ao antigo ml_auth.py)
@@ -121,6 +165,7 @@ class MercadoLivreCanal:
             "redirect_uri": self._config.redirect_uri,
         }
 
+        self._registrar_chamada("oauth_trocar_code")
         resposta = requests.post(TOKEN_URL, data=dados, timeout=15)
 
         if resposta.status_code != 200:
@@ -201,6 +246,30 @@ class MercadoLivreCanal:
         expira_em = obtido_em + expires_in
         return time.time() >= (expira_em - MARGEM_SEGURANCA_SEGUNDOS)
 
+    @staticmethod
+    def _calcular_espera_renovacao(tentativa: int, retry_after_header: str | None) -> float:
+        """
+        Decide quanto esperar antes da próxima tentativa de renovação.
+
+        Se o servidor mandou 'Retry-After', esse valor manda (sem backoff
+        exponencial por cima - o servidor já disse exatamente quanto
+        esperar). Sem o header, usa backoff exponencial (dobra a cada
+        tentativa, limitado a BACKOFF_MAXIMO_RENOVACAO_SEGUNDOS) + um
+        jitter aleatório pequeno, pra reduzir a chance de várias contas
+        (threads/processos diferentes) tentarem de novo no mesmo instante
+        exato - justamente o cenário que causou o 429 em primeiro lugar
+        (Fase 2: HC/WC/CC quase simultâneas).
+        """
+        if retry_after_header:
+            try:
+                return max(0.0, float(retry_after_header))
+            except ValueError:
+                pass  # header presente mas não numérico - cai pro backoff normal
+
+        base = min(BACKOFF_MAXIMO_RENOVACAO_SEGUNDOS, BACKOFF_INICIAL_RENOVACAO_SEGUNDOS * (2 ** (tentativa - 1)))
+        jitter = random.uniform(0, JITTER_MAXIMO_RENOVACAO_SEGUNDOS)
+        return base + jitter
+
     def _renovar_tokens(self, refresh_token: str) -> dict:
         """
         Troca um refresh_token por um novo par access_token/refresh_token.
@@ -209,6 +278,20 @@ class MercadoLivreCanal:
         renovação e devolve um novo. Por isso sempre salvamos o resultado
         imediatamente - se perdermos esse novo refresh_token, o antigo já
         não funciona mais.
+
+        Helper específico (não reaproveita _get_com_retry) porque essa é
+        uma chamada POST única com corpo de formulário OAuth, não um GET
+        item-a-item - a decisão de retry aqui também precisa diferenciar
+        erro TRANSITÓRIO (429/5xx/timeout/conexão - vale tentar de novo)
+        de erro PERMANENTE (ex: 400/401 com refresh_token inválido/já
+        usado - retry não ajudaria, só atrasaria a falha real e poderia
+        mascarar um problema de credencial como se fosse rate limit).
+
+        Não assume nenhuma regra específica do Mercado Livre pro corpo
+        "local_rate_limited" além do que a resposta mostra - só registra
+        esse texto como informação de diagnóstico quando presente, e trata
+        o HTTP 429 como transitório (mesmo critério já usado em
+        _get_com_retry para chamadas normais: 429 ou >=500).
         """
         dados = {
             "grant_type": "refresh_token",
@@ -216,13 +299,70 @@ class MercadoLivreCanal:
             "client_secret": self._config.client_secret,
             "refresh_token": refresh_token,
         }
-        resposta = requests.post(TOKEN_URL, data=dados, timeout=15)
 
-        if resposta.status_code != 200:
-            raise RuntimeError(f"Falha ao renovar o token (status {resposta.status_code}): {resposta.text}")
+        for tentativa in range(1, MAX_TENTATIVAS_RENOVACAO_TOKEN + 1):
+            self._registrar_chamada("oauth_renovar_token")
+            try:
+                resposta = requests.post(TOKEN_URL, data=dados, timeout=15)
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as erro:
+                if tentativa >= MAX_TENTATIVAS_RENOVACAO_TOKEN:
+                    print(f"[conta: {self.conta_id}] Renovação de token: erro de conexão/timeout na "
+                          f"tentativa {tentativa}/{MAX_TENTATIVAS_RENOVACAO_TOKEN} - número máximo de "
+                          f"tentativas atingido. Desistindo.")
+                    raise RuntimeError(
+                        f"Falha ao renovar o token: erro de conexão/timeout após "
+                        f"{MAX_TENTATIVAS_RENOVACAO_TOKEN} tentativas ({erro})"
+                    ) from erro
+                espera = self._calcular_espera_renovacao(tentativa, None)
+                print(f"[conta: {self.conta_id}] Renovação de token: erro de conexão/timeout na "
+                      f"tentativa {tentativa}/{MAX_TENTATIVAS_RENOVACAO_TOKEN} ({erro}). "
+                      f"Aguardando {espera:.1f}s antes de tentar de novo...")
+                time.sleep(espera)
+                continue
 
-        novos_tokens = resposta.json()
-        return self._salvar_tokens(novos_tokens)
+            if resposta.status_code == 200:
+                if tentativa > 1:
+                    print(f"[conta: {self.conta_id}] Renovação de token bem-sucedida na tentativa "
+                          f"{tentativa}/{MAX_TENTATIVAS_RENOVACAO_TOKEN}.")
+                novos_tokens = resposta.json()
+                return self._salvar_tokens(novos_tokens)
+
+            corpo = resposta.text
+            if "local_rate_limited" in corpo:
+                print(f"[conta: {self.conta_id}] Renovação de token: resposta contém "
+                      f"'local_rate_limited' (diagnóstico, status {resposta.status_code}): {corpo}")
+
+            transitorio = resposta.status_code == 429 or resposta.status_code >= 500
+            if not transitorio:
+                # Erro permanente (ex: 400 invalid_grant, 401) - retry não ajudaria.
+                print(f"[conta: {self.conta_id}] Renovação de token: erro permanente de OAuth "
+                      f"(status {resposta.status_code}), sem retry.")
+                raise RuntimeError(
+                    f"Falha ao renovar o token (status {resposta.status_code}, erro permanente): {corpo}"
+                )
+
+            categoria = "429" if resposta.status_code == 429 else f"5xx (status {resposta.status_code})"
+            if tentativa >= MAX_TENTATIVAS_RENOVACAO_TOKEN:
+                print(f"[conta: {self.conta_id}] Renovação de token: {categoria} na tentativa "
+                      f"{tentativa}/{MAX_TENTATIVAS_RENOVACAO_TOKEN} - número máximo de tentativas "
+                      f"atingido. Desistindo.")
+                raise RuntimeError(
+                    f"Falha ao renovar o token (status {resposta.status_code}) após "
+                    f"{MAX_TENTATIVAS_RENOVACAO_TOKEN} tentativas: {corpo}"
+                )
+
+            espera = self._calcular_espera_renovacao(tentativa, resposta.headers.get("Retry-After"))
+            print(f"[conta: {self.conta_id}] Renovação de token: {categoria} na tentativa "
+                  f"{tentativa}/{MAX_TENTATIVAS_RENOVACAO_TOKEN}. Aguardando {espera:.1f}s antes de "
+                  f"tentar de novo...")
+            time.sleep(espera)
+
+        # Inalcançável em teoria (o loop sempre retorna ou levanta antes do
+        # fim), mas evita "função pode não retornar" de forma explícita.
+        raise RuntimeError(
+            f"Falha ao renovar o token: número máximo de tentativas "
+            f"({MAX_TENTATIVAS_RENOVACAO_TOKEN}) atingido sem sucesso nem erro permanente."
+        )
 
     def _token_valido(self) -> str:
         """
@@ -231,22 +371,31 @@ class MercadoLivreCanal:
         consultar o banco a cada chamada de API - só busca no banco na
         primeira vez, e só grava de novo quando o token é efetivamente
         renovado.
+
+        Fase 3: todo o corpo (leitura + decisão + renovação) roda dentro de
+        self._tokens_lock - não só a escrita final, porque é a sequência
+        leitura-decisão-escrita que precisa ser atômica (senão duas threads
+        podem "ver" o token como expirado antes de qualquer uma renovar).
+        Isso serializa brevemente as threads da mesma conta durante uma
+        renovação de token (chamada de rede dentro do lock) - aceitável
+        porque só acontece perto da expiração, raro na duração de uma coleta.
         """
-        tokens = self._tokens_cache or obter_token(self.conta_id)
+        with self._tokens_lock:
+            tokens = self._tokens_cache or obter_token(self.conta_id)
 
-        if not tokens:
-            raise RuntimeError(
-                f"Nenhum token salvo pra conta '{self.conta_id}'. Rode "
-                "'python main.py passo1 <conta_id>' e 'python main.py passo2 <conta_id> <code>' primeiro."
-            )
+            if not tokens:
+                raise RuntimeError(
+                    f"Nenhum token salvo pra conta '{self.conta_id}'. Rode "
+                    "'python main.py passo1 <conta_id>' e 'python main.py passo2 <conta_id> <code>' primeiro."
+                )
 
-        if self._token_expirado(tokens):
-            print(f"[conta: {self.conta_id}] Access token expirado ou perto de expirar - renovando...")
-            tokens = self._renovar_tokens(tokens["refresh_token"])
-            print("Token renovado com sucesso.")
+            if self._token_expirado(tokens):
+                print(f"[conta: {self.conta_id}] Access token expirado ou perto de expirar - renovando...")
+                tokens = self._renovar_tokens(tokens["refresh_token"])
+                print("Token renovado com sucesso.")
 
-        self._tokens_cache = tokens
-        return tokens["access_token"]
+            self._tokens_cache = tokens
+            return tokens["access_token"]
 
     def obter_id_vendedor(self) -> str:
         """Retorna o user_id do vendedor associado ao token salvo dessa conta."""
@@ -265,8 +414,31 @@ class MercadoLivreCanal:
     def _cabecalho(self) -> dict:
         return {"Authorization": f"Bearer {self._token_valido()}"}
 
+    # ------------------------------------------------------------------
+    # Instrumentação TEMPORÁRIA de medição (Fase 1) - ver instrumentacao.py.
+    # Todos os métodos abaixo são no-op quando self._metricas é None (padrão
+    # de todo chamador que não passou instrumentação), preservando o
+    # comportamento exato de antes desta instrumentação existir.
+    # ------------------------------------------------------------------
+
+    def _registrar_chamada(self, rotulo: str) -> None:
+        """Incrementa o contador de chamadas HTTP da instrumentação, se houver uma Metricas configurada. Não registra token/credencial/payload - só o rótulo do endpoint."""
+        if self._metricas is not None:
+            self._metricas.registrar_chamada(self.conta_id, rotulo)
+
+    def _bloco(self, nome: str):
+        """Context manager de medição de tempo por bloco nomeado, ou um no-op se não houver instrumentação configurada."""
+        if self._metricas is None:
+            return nullcontext()
+        return self._metricas.medir_bloco(self.conta_id, nome)
+
+    def _registrar_retry(self, rotulo: str) -> None:
+        """Incrementa o contador de retries (429/5xx) da instrumentação, se houver uma Metricas configurada."""
+        if self._metricas is not None:
+            self._metricas.registrar_retry(self.conta_id, rotulo)
+
     def _get_com_retry(
-        self, url: str, params: dict, timeout: int = 15, headers_extra: dict | None = None
+        self, url: str, params: dict, timeout: int = 15, headers_extra: dict | None = None, rotulo: str | None = None
     ) -> requests.Response:
         """
         GET com retry automático em caso de rate limit (429) ou erro
@@ -275,13 +447,23 @@ class MercadoLivreCanal:
         derrubar o script inteiro. `headers_extra` complementa (não
         substitui) o cabeçalho de autenticação - usado por endpoints que
         exigem um header extra, como 'api-version' na API de Ads.
+
+        `rotulo` (opcional) é só pra instrumentação (ver acima) - identifica
+        o endpoint chamado (ex: "orders_search") pra contagem de chamadas.
+        Conta cada tentativa real enviada (inclusive retries), não só a
+        chamada lógica - reflete o volume de requisições de verdade contra
+        a API, relevante pra avaliação de rate limit.
         """
         headers = {**self._cabecalho(), **(headers_extra or {})}
         for tentativa in range(MAX_TENTATIVAS_RATE_LIMIT):
+            if rotulo:
+                self._registrar_chamada(rotulo)
             resposta = self._sessao.get(url, headers=headers, params=params, timeout=timeout)
             if resposta.status_code != 429 and resposta.status_code < 500:
                 return resposta
 
+            if rotulo:
+                self._registrar_retry(rotulo)
             espera = int(resposta.headers.get("Retry-After", 2 ** (tentativa + 1)))
             print(f"Erro temporário da API do Mercado Livre ({resposta.status_code}). "
                   f"Aguardando {espera}s antes de tentar de novo...")
@@ -298,6 +480,7 @@ class MercadoLivreCanal:
             resposta = self._get_com_retry(
                 f"{BASE_URL}/users/{seller_id}/items/search",
                 params={"status": "active", "limit": limite, "offset": offset},
+                rotulo="itens_ativos",
             )
             resposta.raise_for_status()
             corpo = resposta.json()
@@ -315,14 +498,38 @@ class MercadoLivreCanal:
     def _obter_detalhes_itens(self, item_ids: list[str]) -> list[dict]:
         detalhes: list[dict] = []
         for lote in _em_lotes(item_ids):
-            resposta = self._get_com_retry(f"{BASE_URL}/items", params={"ids": ",".join(lote)})
+            resposta = self._get_com_retry(f"{BASE_URL}/items", params={"ids": ",".join(lote)}, rotulo="itens_detalhes")
             resposta.raise_for_status()
             for entrada in resposta.json():
                 if entrada.get("code") == 200:
                     detalhes.append(entrada["body"])
         return detalhes
 
-    def _obter_visitas_itens(self, item_ids: list[str], data_de: str, data_ate: str) -> dict[str, int]:
+    def _obter_visita_um_item(self, item_id: str, data_de: str, data_ate: str) -> int:
+        """Uma única chamada de visita - unidade de trabalho reaproveitada tanto no modo legado quanto no concorrente (Fase 3)."""
+        resposta = self._get_com_retry(
+            f"{BASE_URL}/items/{item_id}/visits",
+            params={"date_from": data_de, "date_to": data_ate},
+            rotulo="visitas",
+        )
+        resposta.raise_for_status()
+        return resposta.json().get("total_visits", 0)
+
+    def _verificar_falha_generalizada_visitas(self, falhas: list[str], total: int) -> None:
+        """Se a proporção de falhas passar do limiar, aborta a conta (ver LIMITE_FALHA_VISITAS_ABORTA)."""
+        if not falhas:
+            return
+        proporcao = len(falhas) / total
+        print(f"[conta: {self.conta_id}] {len(falhas)}/{total} item(ns) sem visita coletada ({proporcao:.1%}).")
+        if proporcao > LIMITE_FALHA_VISITAS_ABORTA:
+            raise RuntimeError(
+                f"Mais de {LIMITE_FALHA_VISITAS_ABORTA:.0%} das chamadas de visita falharam "
+                f"({len(falhas)}/{total}) na conta '{self.conta_id}' - abortando a coleta desta conta "
+                "(mesmo comportamento de antes da Fase 3 pra uma falha generalizada, em vez de mascarar "
+                "o problema como visitas=0)."
+            )
+
+    def _obter_visitas_itens(self, item_ids: list[str], data_de: str, data_ate: str) -> dict[str, int | None]:
         """
         data_de/data_ate no formato 'YYYY-MM-DD' (só a data, sem hora).
 
@@ -331,17 +538,73 @@ class MercadoLivreCanal:
         por isso usamos /items/{item_id}/visits, que é por item (só aceita 1
         de cada vez) e realmente respeita date_from/date_to. date_to é
         exclusivo (vai até o início do dia de date_to, não até o fim dele).
+
+        Fase 3: o nº de chamadas simultâneas é controlado por
+        VISITAS_MAX_WORKERS (config/settings.py::obter_workers_visitas,
+        padrão 5). VISITAS_MAX_WORKERS=1 preserva o modo legado completo
+        (sequencial, com o sleep original entre cada chamada).
+
+        Falha individual (erro/timeout numa chamada, não zero real) NUNCA
+        vira silenciosamente visitas=0: o item falho entra no dict com valor
+        None (coluna `visitas` já é INTEGER nullable, sem NOT NULL - grava
+        como NULL, não como 0), deixando claro que a visita não foi
+        coletada, em vez de contaminar o histórico com um zero falso. Um
+        item que nunca foi submetido pra coleta (não está em item_ids)
+        continua ausente do dict - comportamento antigo preservado pra quem
+        já usa `.get(item_id, 0)` fora daqui (ex: item vendido mas pausado,
+        que nunca teve visita solicitada, não é o mesmo caso de "falhou").
+        Se a proporção de falhas passar de LIMITE_FALHA_VISITAS_ABORTA, a
+        função levanta exceção (aborta a conta) em vez de seguir com
+        sucesso parcial - preserva o comportamento de antes da Fase 3 pra
+        degradação generalizada (token inválido, rate limit em cascata).
         """
-        visitas: dict[str, int] = {}
-        for item_id in item_ids:
-            resposta = self._get_com_retry(
-                f"{BASE_URL}/items/{item_id}/visits",
-                params={"date_from": data_de, "date_to": data_ate},
-            )
-            resposta.raise_for_status()
-            visitas[item_id] = resposta.json().get("total_visits", 0)
-            time.sleep(PAUSA_ENTRE_VISITAS_SEGUNDOS)
+        if not item_ids:
+            return {}
+
+        workers = obter_workers_visitas()
+        visitas: dict[str, int | None] = {}
+        falhas: list[str] = []
+
+        if workers <= 1:
+            # Modo legado explícito (VISITAS_MAX_WORKERS=1) - sequencial,
+            # com o mesmo sleep de antes da Fase 3 entre cada chamada.
+            for item_id in item_ids:
+                try:
+                    visitas[item_id] = self._obter_visita_um_item(item_id, data_de, data_ate)
+                except Exception as erro:
+                    visitas[item_id] = None
+                    falhas.append(item_id)
+                    self._registrar_falha_item_visita()
+                    print(f"[conta: {self.conta_id}] Falha ao coletar visitas do item {item_id}: {erro}")
+                time.sleep(PAUSA_ENTRE_VISITAS_SEGUNDOS)
+            self._verificar_falha_generalizada_visitas(falhas, len(item_ids))
+            return visitas
+
+        workers = min(workers, len(item_ids))
+        if self._metricas is not None:
+            self._metricas.registrar_workers(self.conta_id, "visitas", workers)
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futuros = {
+                executor.submit(self._obter_visita_um_item, item_id, data_de, data_ate): item_id
+                for item_id in item_ids
+            }
+            for futuro in as_completed(futuros):
+                item_id = futuros[futuro]
+                try:
+                    visitas[item_id] = futuro.result()
+                except Exception as erro:
+                    visitas[item_id] = None
+                    falhas.append(item_id)
+                    self._registrar_falha_item_visita()
+                    print(f"[conta: {self.conta_id}] Falha ao coletar visitas do item {item_id}: {erro}")
+
+        self._verificar_falha_generalizada_visitas(falhas, len(item_ids))
         return visitas
+
+    def _registrar_falha_item_visita(self) -> None:
+        if self._metricas is not None:
+            self._metricas.registrar_falha_item(self.conta_id, "visitas")
 
     def _obter_pedidos_periodo(
         self,
@@ -385,6 +648,7 @@ class MercadoLivreCanal:
             resposta = self._get_com_retry(
                 f"{BASE_URL}/orders/search",
                 params={**params_base, "offset": offset},
+                rotulo=f"orders_search_{campo_data}",
             )
             resposta.raise_for_status()
             corpo = resposta.json()
@@ -460,7 +724,7 @@ class MercadoLivreCanal:
         separada, uma por pedido (volume diário baixo o suficiente pra não
         precisar de lote/throttle como em _obter_visitas_itens).
         """
-        resposta = self._get_com_retry(f"{BASE_URL}/shipments/{shipping_id}", params={})
+        resposta = self._get_com_retry(f"{BASE_URL}/shipments/{shipping_id}", params={}, rotulo="shipment_status")
         resposta.raise_for_status()
         corpo = resposta.json()
         return {
@@ -477,7 +741,7 @@ class MercadoLivreCanal:
         pelo comprador) - aqui pegamos o que sai do bolso do vendedor,
         somando todos os 'senders' (normalmente só 1).
         """
-        resposta = self._get_com_retry(f"{BASE_URL}/shipments/{shipping_id}/costs", params={})
+        resposta = self._get_com_retry(f"{BASE_URL}/shipments/{shipping_id}/costs", params={}, rotulo="shipment_costs")
         resposta.raise_for_status()
         corpo = resposta.json()
         return sum(sender.get("cost", 0.0) for sender in corpo.get("senders", []))
@@ -525,16 +789,20 @@ class MercadoLivreCanal:
         """Busca anúncios ativos, visitas e vendas de um dia calendário completo, pra essa conta."""
         seller_id = self.obter_id_vendedor()
 
-        item_ids = self._listar_itens_ativos(seller_id)
+        with self._bloco("itens_ativos"):
+            item_ids = self._listar_itens_ativos(seller_id)
         print(f"[conta: {self.conta_id}] {len(item_ids)} anúncio(s) ativo(s) encontrado(s).")
 
-        detalhes = self._obter_detalhes_itens(item_ids)
+        with self._bloco("itens_detalhes"):
+            detalhes = self._obter_detalhes_itens(item_ids)
 
         visitas_data_de = dia.isoformat()
         visitas_data_ate = (dia + timedelta(days=1)).isoformat()
 
-        visitas_por_item = self._obter_visitas_itens(item_ids, visitas_data_de, visitas_data_ate)
-        pedidos = self._pedidos_do_dia_brasilia(seller_id, dia)
+        with self._bloco("visitas"):
+            visitas_por_item = self._obter_visitas_itens(item_ids, visitas_data_de, visitas_data_ate)
+        with self._bloco("pedidos_do_dia"):
+            pedidos = self._pedidos_do_dia_brasilia(seller_id, dia)
 
         vendas_por_item: dict[str, dict] = {}
         for pedido in pedidos:
@@ -555,7 +823,8 @@ class MercadoLivreCanal:
         # zerado sumiu com R$7.421 de receita de um único dia.
         ids_vendidos_mas_inativos = set(vendas_por_item) - {str(d["id"]) for d in detalhes}
         if ids_vendidos_mas_inativos:
-            detalhes = detalhes + self._obter_detalhes_itens(list(ids_vendidos_mas_inativos))
+            with self._bloco("itens_detalhes_pausados"):
+                detalhes = detalhes + self._obter_detalhes_itens(list(ids_vendidos_mas_inativos))
 
         dados_anuncios = []
         for item in detalhes:
@@ -591,17 +860,19 @@ class MercadoLivreCanal:
         database/pedidos.py::salvar_pedidos_do_dia() espera.
         """
         seller_id = self.obter_id_vendedor()
-        pedidos = self._pedidos_do_dia_brasilia(seller_id, dia)
+        with self._bloco("pedidos_do_dia"):
+            pedidos = self._pedidos_do_dia_brasilia(seller_id, dia)
 
         resultado = []
-        for pedido in pedidos:
-            shipping_id = pedido.get("shipping", {}).get("id")
-            status_envio = self._obter_status_envio(shipping_id) if shipping_id else {}
-            resultado.append({
-                "pedido_id": str(pedido["id"]),
-                "valor_total": pedido.get("total_amount", 0.0),
-                **status_envio,
-            })
+        with self._bloco("status_envio"):
+            for pedido in pedidos:
+                shipping_id = pedido.get("shipping", {}).get("id")
+                status_envio = self._obter_status_envio(shipping_id) if shipping_id else {}
+                resultado.append({
+                    "pedido_id": str(pedido["id"]),
+                    "valor_total": pedido.get("total_amount", 0.0),
+                    **status_envio,
+                })
 
         return resultado
 
@@ -658,7 +929,8 @@ class MercadoLivreCanal:
         alocado a nenhum item).
         """
         seller_id = self.obter_id_vendedor()
-        pedidos = self._pedidos_do_dia_brasilia(seller_id, dia, status=None)
+        with self._bloco("extrato_pedidos_do_dia"):
+            pedidos = self._pedidos_do_dia_brasilia(seller_id, dia, status=None)
 
         resultado = []
         for pedido in pedidos:
@@ -691,7 +963,8 @@ class MercadoLivreCanal:
                 continue
 
             shipping_id = pedido.get("shipping", {}).get("id")
-            frete_pedido = self._obter_custo_frete_vendedor(shipping_id) if shipping_id else 0.0
+            with self._bloco("extrato_custo_frete"):
+                frete_pedido = self._obter_custo_frete_vendedor(shipping_id) if shipping_id else 0.0
 
             precos_dos_itens = [item.get("unit_price", 0) * item.get("quantity", 0) for item in itens]
             soma_precos = sum(precos_dos_itens)
@@ -734,10 +1007,12 @@ class MercadoLivreCanal:
         (ver database/extrato_referencia.py).
         """
         seller_id = self.obter_id_vendedor()
-        pedidos_criados_hoje = self._pedidos_do_dia_brasilia(seller_id, dia, status=None)
+        with self._bloco("referencias_pedidos_criados"):
+            pedidos_criados_hoje = self._pedidos_do_dia_brasilia(seller_id, dia, status=None)
         ids_ja_contados = {str(p["id"]) for p in pedidos_criados_hoje}
 
-        pedidos_fechados = self._pedidos_fechados_no_dia_brasilia(seller_id, dia)
+        with self._bloco("referencias_pedidos_fechados"):
+            pedidos_fechados = self._pedidos_fechados_no_dia_brasilia(seller_id, dia)
 
         resultado = []
         for pedido in pedidos_fechados:
@@ -771,6 +1046,7 @@ class MercadoLivreCanal:
         contas futuras sem esse produto habilitado sem quebrar a rotina).
         """
         headers = {**self._cabecalho(), "Api-Version": "1"}
+        self._registrar_chamada("ads_advertiser_id")
         resposta = self._sessao.get(
             f"{BASE_URL}/advertising/advertisers", headers=headers, params={"product_id": "PADS"}, timeout=15
         )
@@ -816,6 +1092,7 @@ class MercadoLivreCanal:
                     "metrics": self._METRICAS_ADS,
                 },
                 headers_extra={"api-version": "2"},
+                rotulo="ads_campanhas",
             )
             resposta.raise_for_status()
             corpo = resposta.json()
@@ -879,6 +1156,7 @@ class MercadoLivreCanal:
                     "filters[statuses]": "active,paused",
                 },
                 headers_extra={"api-version": "2"},
+                rotulo="ads_anuncios",
             )
             resposta.raise_for_status()
             corpo = resposta.json()

@@ -45,15 +45,20 @@ class CanalAdapter(Protocol):
         ...
 
 
-def obter_adaptador(conta_id: str, canal: str) -> CanalAdapter:
+def obter_adaptador(conta_id: str, canal: str, metricas=None) -> CanalAdapter:
     """
     Fábrica: devolve o adaptador certo pra um canal, já configurado pra uma
     conta específica. Import interno (não no topo do módulo) pra não forçar
     a carga de credenciais de canais que a conta não usa.
+
+    `metricas` (opcional, instrumentacao.py::Metricas) é instrumentação
+    TEMPORÁRIA da Fase 1 de medição - só o adaptador do Mercado Livre usa;
+    omitido (None, padrão), o comportamento é idêntico ao de antes desta
+    instrumentação existir.
     """
     if canal == "mercado_livre":
         from integrations.canais.mercado_livre import MercadoLivreCanal
-        return MercadoLivreCanal(conta_id)
+        return MercadoLivreCanal(conta_id, metricas=metricas)
     if canal == "shopee":
         from integrations.canais.shopee import ShopeeCanal
         return ShopeeCanal(conta_id)

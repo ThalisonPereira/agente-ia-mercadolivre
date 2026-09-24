@@ -69,6 +69,23 @@ def carregar_configuracao_ml(conta_id: str | None = None) -> MercadoLivreConfig:
     )
 
 
+def obter_workers_visitas() -> int:
+    """
+    Nº de workers concorrentes pra coleta de visitas (Fase 3 - ver
+    integrations/canais/mercado_livre.py::_obter_visitas_itens), configurável
+    via VISITAS_MAX_WORKERS. Padrão: 5.
+
+    VISITAS_MAX_WORKERS=1 é o modo legado explícito: volta ao comportamento
+    de antes da Fase 3 por completo (1 requisição por vez, com o
+    time.sleep(PAUSA_ENTRE_VISITAS_SEGUNDOS) original entre cada uma) - não é
+    só "ThreadPoolExecutor com 1 worker", que sozinho não reintroduziria o
+    delay. Serve de rollback rápido via .env/GitHub Actions, sem reverter
+    código.
+    """
+    valor = os.getenv("VISITAS_MAX_WORKERS", "5")
+    return max(1, int(valor))
+
+
 CAMINHO_SERVICE_ACCOUNT = Path(__file__).resolve().parent / "google_service_account.json"
 
 
