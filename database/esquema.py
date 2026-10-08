@@ -291,6 +291,183 @@ CREATE TABLE IF NOT EXISTS estoque_risco (
 );
 """
 
+# --------------------------------------------------------------------------
+# Central de Alertas (Fase 3.3) - captura de eventos pós-venda (perguntas,
+# mensagens, reclamações, devoluções) via webhook do Mercado Livre,
+# processados por um worker Python, alertando o painel Lovable via Realtime.
+# Ver auditoria/desenho completo nas Fases 2.x/3.x desta sessão - JSONB/
+# TIMESTAMPTZ/FK são um desvio deliberado do resto do schema (que usa só
+# TEXT/INTEGER/REAL), justificado pela necessidade real de consulta
+# estruturada (claim de fila, histórico por recurso) que essas 4 tabelas
+# têm e as demais não.
+#
+# Evento bruto recebido do webhook do Mercado Livre (gravado pelo endpoint
+# no Lovable) - nunca alterado depois de inserido, exceto pelos campos de
+# controle de processamento (status/erro/tentativas). `id` é o próprio id
+# do evento gerado pelo Mercado Livre - reentrega do mesmo webhook (mesmo
+# id) é ignorada na inserção (ON CONFLICT DO NOTHING), garantindo
+# idempotência na entrada. `conta_id` fica NULL até o worker resolver
+# application_id -> conta_id (não se resolve no recebimento do webhook,
+# que precisa responder rápido e sem lógica pesada).
+CRIAR_TABELA_EVENTOS_ML_WEBHOOK = """
+CREATE TABLE IF NOT EXISTS eventos_ml_webhook (
+    id                          TEXT PRIMARY KEY,
+    conta_id                    TEXT NULL,
+    topico                      TEXT NOT NULL,
+    recurso                     TEXT NOT NULL,
+    user_id_ml                  TEXT NOT NULL,
+    application_id              TEXT NOT NULL,
+    actions                     JSONB NULL,
+    ml_attempts                 INTEGER NULL,
+    sent_em                     TIMESTAMPTZ NULL,
+    recebido_em                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+    payload_bruto               JSONB NOT NULL,
+    processando_em              TIMESTAMPTZ NULL,
+    processado_em                TIMESTAMPTZ NULL,
+    status_processamento        TEXT NOT NULL DEFAULT 'pendente'
+        CHECK (status_processamento IN ('pendente','processando','processado','erro')),
+    erro_processamento           TEXT NULL,
+    tentativas_processamento     INTEGER NOT NULL DEFAULT 0
+        CHECK (tentativas_processamento >= 0)
+);
+"""
+
+# Resultado normalizado de um evento processado com sucesso - histórico
+# completo (nunca sobrescrito), 1 linha por evento bruto processado (PK
+# reaproveita o id do evento_webhook, propagando a mesma idempotência).
+# Eventos legítimos diferentes do mesmo recurso (ex: 2 perguntas separadas
+# no mesmo anúncio) geram 2 linhas aqui, com PKs diferentes - não há
+# unicidade por recurso_id, só por evento_webhook_id.
+CRIAR_TABELA_EVENTOS_ML_PROCESSADOS = """
+CREATE TABLE IF NOT EXISTS eventos_ml_processados (
+    evento_webhook_id       TEXT PRIMARY KEY,
+    conta_id                 TEXT NOT NULL,
+    tipo_normalizado         TEXT NOT NULL
+        CHECK (tipo_normalizado IN ('pergunta','mensagem','reclamacao','devolucao')),
+    recurso_original          TEXT NOT NULL,
+    recurso_id                TEXT NOT NULL,
+    data_evento_ml             TIMESTAMPTZ NULL,
+    snapshot_ml                JSONB NOT NULL,
+    identificadores            JSONB NULL,
+    versao_normalizador        INTEGER NOT NULL DEFAULT 1,
+    processado_em               TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+"""
+
+# Estado ATUAL da ocorrência (não histórico - isso é eventos_ml_processados).
+# status_interno é controlado manualmente pelo usuário no painel (aberto/em_
+# andamento/resolvido); visto_pelo_usuario é global (não por usuário - a V1
+# decidiu que todos os usuários do painel recebem os mesmos alertas, ver
+# Fase 3.1). Um evento novo para um recurso já existente SEMPRE reabre o
+# alerta (status_interno volta pra 'aberto', visto_pelo_usuario volta pra 0),
+# mesmo que estivesse 'resolvido' - ver database/eventos_alertas.py.
+CRIAR_TABELA_ALERTAS_POS_VENDA = """
+CREATE TABLE IF NOT EXISTS alertas_pos_venda (
+    conta_id                    TEXT NOT NULL,
+    tipo                        TEXT NOT NULL
+        CHECK (tipo IN ('pergunta','mensagem','reclamacao','devolucao')),
+    recurso_id                   TEXT NOT NULL,
+    titulo                       TEXT NULL,
+    resumo                       TEXT NULL,
+    texto                        TEXT NULL,
+    status_externo                TEXT NULL,
+    status_interno                TEXT NOT NULL DEFAULT 'aberto'
+        CHECK (status_interno IN ('aberto','em_andamento','resolvido')),
+    visto_pelo_usuario             INTEGER NOT NULL DEFAULT 0
+        CHECK (visto_pelo_usuario IN (0,1)),
+    data_evento_ml                  TIMESTAMPTZ NULL,
+    detectado_em                     TIMESTAMPTZ NOT NULL,
+    atualizado_em                     TIMESTAMPTZ NOT NULL,
+    ultimo_evento_webhook_id           TEXT NULL,
+    dados_auxiliares                   JSONB NULL,
+    PRIMARY KEY (conta_id, tipo, recurso_id)
+);
+"""
+
+# Obrigação de notificação (wake-up via Realtime) - 1 linha por evento
+# processado (PK reaproveita evento_processado_id, mesma cadeia de
+# idempotência). O Broadcast em si NUNCA é fonte de verdade - esta tabela
+# é. status='publicada' é setado pelo publicador (Lovable, via chave
+# privilegiada), nunca pelo worker Python que só cria a obrigação como
+# 'pendente'.
+CRIAR_TABELA_NOTIFICACOES_ALERTA = """
+CREATE TABLE IF NOT EXISTS notificacoes_alerta (
+    evento_processado_id     TEXT PRIMARY KEY,
+    conta_id                  TEXT NOT NULL,
+    tipo                       TEXT NOT NULL
+        CHECK (tipo IN ('pergunta','mensagem','reclamacao','devolucao')),
+    recurso_id                  TEXT NOT NULL,
+    status                       TEXT NOT NULL DEFAULT 'pendente'
+        CHECK (status IN ('pendente','publicada')),
+    criado_em                     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    publicada_em                   TIMESTAMPTZ NULL
+);
+"""
+
+# FKs das 4 tabelas acima - aplicadas incrementalmente (ver _aplicar_fks),
+# porque "CREATE TABLE IF NOT EXISTS" não adiciona constraint a uma tabela
+# já existente. Prioridade é preservar histórico (RESTRICT), não facilitar
+# deletes - só o ponteiro auxiliar ultimo_evento_webhook_id usa SET NULL.
+_FKS_ALERTAS = [
+    ("eventos_ml_webhook", "fk_eventos_webhook_conta", "(conta_id)", "contas(conta_id)", "RESTRICT"),
+    ("eventos_ml_processados", "fk_eventos_processados_webhook", "(evento_webhook_id)", "eventos_ml_webhook(id)", "RESTRICT"),
+    ("eventos_ml_processados", "fk_eventos_processados_conta", "(conta_id)", "contas(conta_id)", "RESTRICT"),
+    ("alertas_pos_venda", "fk_alertas_conta", "(conta_id)", "contas(conta_id)", "RESTRICT"),
+    ("alertas_pos_venda", "fk_alertas_ultimo_evento", "(ultimo_evento_webhook_id)", "eventos_ml_webhook(id)", "SET NULL"),
+    ("notificacoes_alerta", "fk_notificacoes_evento_processado", "(evento_processado_id)", "eventos_ml_processados(evento_webhook_id)", "RESTRICT"),
+    ("notificacoes_alerta", "fk_notificacoes_alerta", "(conta_id, tipo, recurso_id)", "alertas_pos_venda(conta_id, tipo, recurso_id)", "RESTRICT"),
+]
+
+# Índices das 4 tabelas - só os que sustentam uma query real do fluxo (claim
+# de fila, listagem mais recente, contagem de não-vistos, publicador de
+# notificação) - CREATE INDEX IF NOT EXISTS já é nativamente idempotente no
+# Postgres, sem precisar do mesmo tipo de checagem manual das colunas/FKs.
+_INDICES_ALERTAS = [
+    "CREATE INDEX IF NOT EXISTS ix_eventos_webhook_pendente ON eventos_ml_webhook (recebido_em) WHERE status_processamento = 'pendente'",
+    "CREATE INDEX IF NOT EXISTS ix_eventos_webhook_processando ON eventos_ml_webhook (processando_em) WHERE status_processamento = 'processando'",
+    "CREATE INDEX IF NOT EXISTS ix_eventos_webhook_erro ON eventos_ml_webhook (tentativas_processamento) WHERE status_processamento = 'erro'",
+    "CREATE INDEX IF NOT EXISTS ix_eventos_processados_recurso ON eventos_ml_processados (conta_id, tipo_normalizado, recurso_id)",
+    "CREATE INDEX IF NOT EXISTS ix_alertas_atualizado ON alertas_pos_venda (atualizado_em DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_alertas_nao_vistos ON alertas_pos_venda (atualizado_em DESC) WHERE visto_pelo_usuario = 0",
+    "CREATE INDEX IF NOT EXISTS ix_notificacoes_pendente ON notificacoes_alerta (criado_em) WHERE status = 'pendente'",
+    "CREATE INDEX IF NOT EXISTS ix_notificacoes_alerta_fk ON notificacoes_alerta (conta_id, tipo, recurso_id)",
+]
+
+# As 4 tabelas ficam com RLS habilitada e SEM NENHUMA policy (deny total
+# pra 'anon'/'authenticated') - mais rígido que o resto do schema (que não
+# tem RLS nenhuma, ver auditoria da Fase 2.2), de propósito: só uma chave
+# service_role (nunca anon) deve ler/escrever aqui. Ver Fase 3.2 seção 8 -
+# essa chave privilegiada pro projeto EXTERNO ainda não existe, é uma
+# pendência de infraestrutura a criar antes do Lovable conseguir ler estas
+# tabelas. ALTER TABLE ... ENABLE ROW LEVEL SECURITY é idempotente (seguro
+# re-executar).
+_TABELAS_RLS_ALERTAS = [
+    "eventos_ml_webhook", "eventos_ml_processados", "alertas_pos_venda", "notificacoes_alerta",
+]
+
+
+def _aplicar_fks(conexao) -> None:
+    for tabela, nome_fk, colunas, referencia, on_delete in _FKS_ALERTAS:
+        existe = conexao.execute(
+            "SELECT 1 FROM pg_constraint WHERE conname = %(nome)s", {"nome": nome_fk}
+        ).fetchone()
+        if not existe:
+            conexao.execute(
+                f"ALTER TABLE {tabela} ADD CONSTRAINT {nome_fk} "
+                f"FOREIGN KEY {colunas} REFERENCES {referencia} ON DELETE {on_delete}"
+            )
+
+
+def _aplicar_indices_alertas(conexao) -> None:
+    for sql in _INDICES_ALERTAS:
+        conexao.execute(sql)
+
+
+def _aplicar_rls_alertas(conexao) -> None:
+    for tabela in _TABELAS_RLS_ALERTAS:
+        conexao.execute(f"ALTER TABLE {tabela} ENABLE ROW LEVEL SECURITY")
+
+
 # Migrações incrementais - adicionam coluna a tabelas que já existiam antes
 # dela ser criada. "CREATE TABLE IF NOT EXISTS" não altera tabela já
 # existente, por isso precisa desse passo à parte. Cada entrada é
@@ -379,14 +556,22 @@ def criar_tabelas() -> None:
         conexao.execute(CRIAR_TABELA_ANALISES_ESTOQUE_DIARIAS)
         conexao.execute(CRIAR_TABELA_ESTOQUE_DIVERGENCIAS)
         conexao.execute(CRIAR_TABELA_ESTOQUE_RISCO)
+        conexao.execute(CRIAR_TABELA_EVENTOS_ML_WEBHOOK)
+        conexao.execute(CRIAR_TABELA_EVENTOS_ML_PROCESSADOS)
+        conexao.execute(CRIAR_TABELA_ALERTAS_POS_VENDA)
+        conexao.execute(CRIAR_TABELA_NOTIFICACOES_ALERTA)
         _aplicar_migracoes(conexao)
+        _aplicar_fks(conexao)
+        _aplicar_indices_alertas(conexao)
+        _aplicar_rls_alertas(conexao)
         conexao.commit()
         print(
             "Tabelas prontas: contas, anuncios, historico_anuncios_diario, "
             "analises_diarias, tokens_oauth, pedidos, custo_produtos, itens_venda, "
             "ads_campanhas_diario, ads_anuncios_diario, analises_ads_diarias, "
             "analises_estoque_diarias, estoque_divergencias, estoque_risco, pedidos_bling, "
-            "itens_venda_referencia."
+            "itens_venda_referencia, eventos_ml_webhook, eventos_ml_processados, "
+            "alertas_pos_venda, notificacoes_alerta."
         )
     finally:
         conexao.close()

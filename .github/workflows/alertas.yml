@@ -1,0 +1,104 @@
+name: Central de Alertas - processar e publicar
+
+# Processa os eventos pendentes do webhook do Mercado Livre (perguntas,
+# reclamações, mensagens - ver database/eventos_alertas.py) e chama o
+# publicador no Lovable (Broadcast Realtime + Web Push), em lotes de até 20
+# notificações por chamada (limite fixo do lado do Lovable,
+# src/lib/publicador-alertas.server.ts).
+#
+# Workflow SEPARADO da rotina diária (rotina-diaria.yml) de propósito: aqui
+# a cadência precisa ser de minutos (perguntas/reclamações são quase tempo
+# real), não de 2x/dia como a coleta de vendas/margem.
+on:
+  schedule:
+    - cron: "*/10 * * * *"  # a cada 10 minutos
+  workflow_dispatch: {}  # permite rodar manualmente pela aba Actions do GitHub
+
+# Evita 2 execuções concorrentes deste workflow (o publicador já tolera
+# concorrência via UPDATE condicional, mas não é exclusão mútua real - ver
+# comentário em publicador-alertas.server.ts - por isso reduzimos o risco
+# aqui também, na origem). Uma execução nova fica enfileirada atrás da
+# anterior (cancel-in-progress: false) em vez de cancelá-la no meio.
+concurrency:
+  group: central-de-alertas
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  processar-e-publicar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Processar eventos pendentes da Central de Alertas
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: python main.py processar_eventos_alertas 50
+
+      - name: Publicar alertas processados (push + Realtime) no Lovable
+        env:
+          LOVABLE_CRON_SECRET: ${{ secrets.ALERTAS_CRON_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # URL a confirmar/preencher depois que o site for publicado.
+          URL="https://ecomm-power.lovable.app/api/public/ml-alertas-publicador"
+          MAX_LOTES=10
+          RESPOSTA_TMP="$(mktemp)"
+          SAIDA_PARSE="$(mktemp)"
+          ERRO_PARSE="$(mktemp)"
+
+          for i in $(seq 1 "$MAX_LOTES"); do
+            # -G + --data-urlencode: o token vai na querystring (é assim que
+            # a rota espera hoje), mas nunca é impresso - nem aqui, nem em
+            # erro (sem -v, sem set -x). O GitHub Actions também mascara
+            # automaticamente qualquer ocorrência do valor do secret no log,
+            # como camada extra de proteção.
+            HTTP_CODE=$(curl -sS -X POST -G "$URL" \
+              --data-urlencode "token=${LOVABLE_CRON_SECRET}" \
+              -o "$RESPOSTA_TMP" \
+              -w "%{http_code}") || {
+                echo "::error::Lote $i: falha de rede/conexão ao chamar o publicador (curl falhou) - tratando como falha do workflow."
+                exit 1
+              }
+
+            if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+              echo "::error::Lote $i: HTTP $HTTP_CODE - erro do endpoint, NÃO é 'fila vazia'. Tratando como falha do workflow."
+              exit 1
+            fi
+
+            # Parser tolerante (script separado, ver .github/scripts/parse_resposta_publicador.py):
+            # falha de verdade só se o corpo não for JSON válido ou faltar o
+            # campo "processadas" (único nome confirmado em todas as versões
+            # vistas do publicador até agora). Nunca ecoa o corpo bruto da
+            # resposta no log - só os campos extraídos.
+            if ! python .github/scripts/parse_resposta_publicador.py "$RESPOSTA_TMP" >"$SAIDA_PARSE" 2>"$ERRO_PARSE"; then
+              echo "::error::Lote $i: resposta inválida/sem o campo esperado - tratando como falha do workflow (não é fila vazia)."
+              cat "$ERRO_PARSE" >&2
+              exit 1
+            fi
+
+            PROCESSADAS="$(grep '^PROCESSADAS:' "$SAIDA_PARSE" | cut -d: -f2)"
+            RESUMO="$(grep '^RESUMO:' "$ERRO_PARSE" | cut -d: -f2-)"
+            echo "Lote $i: $RESUMO"
+
+            if [ "$PROCESSADAS" -lt 20 ]; then
+              echo "Lote incompleto (< 20 processadas) - fila esvaziada, parando."
+              break
+            fi
+
+            if [ "$i" -eq "$MAX_LOTES" ]; then
+              echo "::warning::Atingiu o limite de $MAX_LOTES lotes nesta execução - pode haver mais pendentes; a próxima execução agendada (10 min) continua de onde parou."
+            fi
+          done
+
+          rm -f "$RESPOSTA_TMP" "$SAIDA_PARSE" "$ERRO_PARSE"

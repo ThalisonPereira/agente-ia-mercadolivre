@@ -397,6 +397,19 @@ class MercadoLivreCanal:
             self._tokens_cache = tokens
             return tokens["access_token"]
 
+    def obter_recurso(self, resource_path: str) -> dict:
+        """
+        GET autenticado num caminho de recurso arbitrário do Mercado Livre
+        (ex: '/questions/123456') - usado pelo worker da Central de Alertas
+        (Fase 3.3) pra buscar o conteúdo completo de um evento de webhook,
+        que só chega com um "ponteiro" (resource), não o dado em si. Reaproveita
+        100% o refresh de token já existente via _get_com_retry - nenhuma
+        lógica de OAuth nova.
+        """
+        resposta = self._get_com_retry(f"{BASE_URL}{resource_path}", params={}, rotulo="alertas_recurso")
+        resposta.raise_for_status()
+        return resposta.json()
+
     def obter_id_vendedor(self) -> str:
         """Retorna o user_id do vendedor associado ao token salvo dessa conta."""
         tokens = obter_token(self.conta_id)

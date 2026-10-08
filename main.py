@@ -19,7 +19,14 @@ from integrations.google_sheets import (
     publicar_analise_no_sheets,
     testar_conexao_sheets,
 )
-from database.contas import cadastrar_conta, obter_contas_ativas
+from database.contas import cadastrar_conta, obter_contas_ativas, obter_mapa_application_id_conta
+from database.eventos_alertas import (
+    reivindicar_eventos_pendentes,
+    processar_evento_completo,
+    marcar_erro as marcar_erro_evento_alerta,
+)
+from database.normalizador_alertas import resolver_tipo_normalizado, normalizar
+from integrations.canais.mercado_livre import MercadoLivreCanal
 from database.capturar_snapshot import capturar_snapshot_diario
 from database.analisar_variacao import obter_variacao_anuncios
 from database.historico_completo import obter_datas_existentes
@@ -454,6 +461,69 @@ def _rotina_diaria() -> bool:
     return True
 
 
+def _processar_eventos_alertas_pendentes(limite: int = 10) -> None:
+    """
+    Worker da Central de Alertas (Fase 3.3): reivindica eventos pendentes de
+    eventos_ml_webhook (fila com claim atômico, ver database/eventos_alertas.py),
+    resolve a conta (application_id -> conta_id, ver
+    database/contas.py::obter_mapa_application_id_conta), busca o recurso
+    completo no Mercado Livre e persiste evento processado + alerta +
+    notificação numa única transação.
+
+    NÃO publica Broadcast - isso é responsabilidade do backend Lovable (tem
+    a chave privilegiada do Realtime interno, que este processo não tem e
+    não deveria ter, ver Fase 3.2 seção 8). NÃO é chamado por
+    _rotina_diaria() - comando CLI isolado (`processar_eventos_alertas`)
+    até ser explicitamente ligado a uma automação, decisão fora do escopo
+    desta fase (ver Fase 3.3, "não ativar workflow de produção").
+    """
+    eventos = reivindicar_eventos_pendentes(limite=limite)
+    if not eventos:
+        print("Nenhum evento de alerta pendente de processamento.")
+        return
+
+    mapa_contas = obter_mapa_application_id_conta()
+    print(f"{len(eventos)} evento(s) de alerta reivindicado(s) para processamento.")
+
+    for evento in eventos:
+        evento_id = evento["id"]
+        try:
+            conta_id = mapa_contas.get(evento["application_id"])
+            if not conta_id:
+                raise RuntimeError(
+                    f"application_id '{evento['application_id']}' não corresponde a "
+                    "nenhuma conta ativa cadastrada (conta não resolvida)."
+                )
+
+            tipo = resolver_tipo_normalizado(evento["topico"])
+            if not tipo:
+                raise RuntimeError(f"Tópico '{evento['topico']}' fora do escopo da V1.")
+
+            canal = MercadoLivreCanal(conta_id)
+            snapshot = canal.obter_recurso(evento["recurso"])
+            dados = normalizar(tipo, evento["recurso"], snapshot)
+
+            processar_evento_completo(
+                evento_webhook_id=evento_id,
+                conta_id=conta_id,
+                tipo=tipo,
+                recurso_original=evento["recurso"],
+                recurso_id=dados["recurso_id"],
+                data_evento_ml=dados["data_evento_ml"],
+                snapshot_ml=snapshot,
+                identificadores=dados["identificadores"],
+                titulo=dados["titulo"],
+                resumo=dados["resumo"],
+                texto=dados["texto"],
+                status_externo=dados["status_externo"],
+                dados_auxiliares=None,
+            )
+            print(f"[evento {evento_id}] processado com sucesso (conta={conta_id}, tipo={tipo}).")
+        except Exception as erro:  # noqa: BLE001 - falha de 1 evento não deve travar os demais do lote
+            print(f"[evento {evento_id}] falha ao processar: {erro}")
+            marcar_erro_evento_alerta(evento_id, str(erro))
+
+
 if __name__ == "__main__":
     comando = sys.argv[1] if len(sys.argv) > 1 else None
 
@@ -520,6 +590,10 @@ if __name__ == "__main__":
                 sys.argv[2], sys.argv[3],
                 date.fromisoformat(sys.argv[4]), date.fromisoformat(sys.argv[5]),
             )
+
+    elif comando == "processar_eventos_alertas":
+        limite = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+        _processar_eventos_alertas_pendentes(limite=limite)
 
     elif comando == "analisar_variacao":
         conta_id_filtro = sys.argv[2] if len(sys.argv) > 2 else None
