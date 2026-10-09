@@ -556,22 +556,40 @@ def criar_tabelas() -> None:
         conexao.execute(CRIAR_TABELA_ANALISES_ESTOQUE_DIARIAS)
         conexao.execute(CRIAR_TABELA_ESTOQUE_DIVERGENCIAS)
         conexao.execute(CRIAR_TABELA_ESTOQUE_RISCO)
-        conexao.execute(CRIAR_TABELA_EVENTOS_ML_WEBHOOK)
-        conexao.execute(CRIAR_TABELA_EVENTOS_ML_PROCESSADOS)
-        conexao.execute(CRIAR_TABELA_ALERTAS_POS_VENDA)
-        conexao.execute(CRIAR_TABELA_NOTIFICACOES_ALERTA)
         _aplicar_migracoes(conexao)
-        _aplicar_fks(conexao)
-        _aplicar_indices_alertas(conexao)
-        _aplicar_rls_alertas(conexao)
         conexao.commit()
         print(
             "Tabelas prontas: contas, anuncios, historico_anuncios_diario, "
             "analises_diarias, tokens_oauth, pedidos, custo_produtos, itens_venda, "
             "ads_campanhas_diario, ads_anuncios_diario, analises_ads_diarias, "
             "analises_estoque_diarias, estoque_divergencias, estoque_risco, pedidos_bling, "
-            "itens_venda_referencia, eventos_ml_webhook, eventos_ml_processados, "
-            "alertas_pos_venda, notificacoes_alerta."
+            "itens_venda_referencia."
         )
+    finally:
+        conexao.close()
+
+
+def criar_estrutura_alertas() -> None:
+    """
+    DDL da Central de Alertas (4 tabelas + FKs + índices + RLS) - setup
+    EXPLÍCITO, rodado à mão uma vez (ex: `python -c "from database.esquema
+    import criar_estrutura_alertas; criar_estrutura_alertas()"`), nunca
+    chamado em runtime. Por isso NÃO está em criar_tabelas(): aquele método
+    roda a cada renovação de token (salvar_token), com as contas em paralelo,
+    e o ALTER TABLE ... ENABLE ROW LEVEL SECURITY (lock exclusivo) dentro dele
+    derrubou a rotina diária de 2026-10-09 (contas hc/cc falharam com
+    "current transaction is aborted"). Idempotente, mas só deve rodar sozinho.
+    """
+    conexao = obter_conexao()
+    try:
+        conexao.execute(CRIAR_TABELA_EVENTOS_ML_WEBHOOK)
+        conexao.execute(CRIAR_TABELA_EVENTOS_ML_PROCESSADOS)
+        conexao.execute(CRIAR_TABELA_ALERTAS_POS_VENDA)
+        conexao.execute(CRIAR_TABELA_NOTIFICACOES_ALERTA)
+        _aplicar_fks(conexao)
+        _aplicar_indices_alertas(conexao)
+        _aplicar_rls_alertas(conexao)
+        conexao.commit()
+        print("Estrutura da Central de Alertas pronta (4 tabelas, FKs, índices, RLS).")
     finally:
         conexao.close()

@@ -29,14 +29,26 @@ from config.settings import carregar_configuracao_supabase
 MAX_TENTATIVAS = 3
 
 
-def _com_retry(func, *args, **kwargs):
-    """Mesmo princípio de conexao_turso.py::_com_retry - erro transitório de rede tenta de novo."""
+def _com_retry(func, *args, _conn=None, **kwargs):
+    """
+    Mesmo princípio de conexao_turso.py::_com_retry - erro transitório de rede tenta de novo.
+
+    Exceção: se o erro deixou a transação da conexão abortada (erro do
+    servidor, ex: deadlock/lock timeout/violação de constraint), NÃO repete -
+    repetir no mesmo estado só produziria "current transaction is aborted" e
+    esconderia a causa real (foi o que mascarou a falha da rotina diária de
+    2026-10-09). Também não faz rollback + repetição, porque isso descartaria
+    em silêncio as instruções anteriores da mesma transação (ex:
+    processar_evento_completo) e um commit posterior gravaria só uma parte.
+    """
     ultimo_erro = None
     for tentativa in range(MAX_TENTATIVAS):
         try:
             return func(*args, **kwargs)
         except Exception as erro:  # noqa: BLE001 - qualquer falha de rede/HTTP conta como transitória aqui
             ultimo_erro = erro
+            if _conn is not None and _conn.get_transaction_status() == psycopg2.extensions.TRANSACTION_STATUS_INERROR:
+                raise
             if tentativa < MAX_TENTATIVAS - 1:
                 espera = 2 ** tentativa
                 print(f"Erro temporário ao falar com o Supabase ({erro}). Tentando de novo em {espera}s...")
@@ -76,7 +88,7 @@ class ConexaoSupabase:
                     return []
                 return [dict(linha) for linha in cur.fetchall()]
 
-        return _ResultadoSupabase(_com_retry(_executar))
+        return _ResultadoSupabase(_com_retry(_executar, _conn=self._conn))
 
     def executar_em_lote(self, instrucoes: list[tuple[str, dict]], tamanho_lote: int = 500) -> None:
         """
@@ -94,7 +106,10 @@ class ConexaoSupabase:
 
         for sql, params_lista in grupos.items():
             with self._conn.cursor() as cur:
-                _com_retry(psycopg2.extras.execute_batch, cur, sql, params_lista, page_size=tamanho_lote)
+                _com_retry(
+                    psycopg2.extras.execute_batch, cur, sql, params_lista,
+                    page_size=tamanho_lote, _conn=self._conn,
+                )
 
     def commit(self) -> None:
         self._conn.commit()
