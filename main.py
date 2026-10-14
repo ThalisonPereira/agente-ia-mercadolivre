@@ -35,7 +35,11 @@ from database.custo_produtos import sincronizar as sincronizar_custo_produtos
 from database.pedidos_bling import sincronizar as sincronizar_pedidos_bling
 from database.extrato import salvar_itens_venda_do_dia
 from database.extrato_referencia import salvar_referencias_do_dia
-from database.ads import salvar_campanhas_do_dia, salvar_anuncios_do_dia, obter_resumo as obter_resumo_ads
+from database.ads import (
+    salvar_campanhas_do_dia, salvar_anuncios_do_dia, obter_resumo as obter_resumo_ads,
+    obter_campanhas_diarias, obter_anuncios_diarios,
+)
+from integrations.google_sheets_ads import publicar_ads_no_sheets, criar_painel_ads
 from database.kpis import obter_totais_periodo, obter_data_mais_recente
 from database.estoque import obter_divergencias, obter_anuncios_em_risco, salvar_divergencias, salvar_risco
 from agents.analista_ia import analisar_e_salvar
@@ -446,6 +450,15 @@ def _rotina_diaria() -> bool:
         except Exception as erro:
             print(f"Falha ao analisar estoque: {erro}")
 
+        # Publicidade na planilha (abas brutas "Ads Campanhas"/"Ads Anúncios", 90
+        # dias, todas as contas juntas - por isso fica depois do loop por conta).
+        # Falha aqui não derruba a rotina (mesmo critério do bloco de estoque).
+        try:
+            with metricas.medir_etapa_geral("ads_sheets"):
+                _publicar_ads_na_planilha()
+        except Exception as erro:
+            print(f"Falha ao publicar publicidade na planilha: {erro}")
+
     print("\n" + metricas.relatorio())
 
     contas_com_falha = [r for r in resultados if not r.sucesso]
@@ -459,6 +472,16 @@ def _rotina_diaria() -> bool:
         return False
 
     return True
+
+
+DIAS_ADS_PLANILHA = 90
+
+
+def _publicar_ads_na_planilha() -> None:
+    """Lê os últimos 90 dias de Ads do banco (só leitura) e regrava as abas brutas do Sheets."""
+    campanhas = obter_campanhas_diarias(DIAS_ADS_PLANILHA)
+    anuncios = obter_anuncios_diarios(DIAS_ADS_PLANILHA)
+    publicar_ads_no_sheets(campanhas, anuncios)
 
 
 def _processar_eventos_alertas_pendentes(limite: int = 10) -> None:
@@ -575,6 +598,13 @@ if __name__ == "__main__":
     elif comando == "testar_sheets":
         testar_conexao_sheets()
 
+    elif comando == "publicar_ads_sheets":
+        _publicar_ads_na_planilha()
+
+    elif comando == "criar_painel_ads":
+        # Cria a aba "Painel Ads" (só se ainda não existir; --recriar apaga e refaz).
+        criar_painel_ads([c["conta_id"] for c in obter_contas_ativas()], recriar="--recriar" in sys.argv)
+
     elif comando == "coletar_snapshot":
         if len(sys.argv) < 4:
             print("Uso: python main.py coletar_snapshot <conta_id> <canal>")
@@ -620,6 +650,7 @@ if __name__ == "__main__":
               "passo1 <conta_id>|passo2 <conta_id> <code>|passo3 <conta_id>|"
               "ads_diagnostico <conta_id>|"
               "bling_passo1|bling_passo2 <code>|bling_passo3|"
-              "testar_sheets|coletar_snapshot <conta_id> <canal>|"
+              "testar_sheets|publicar_ads_sheets|criar_painel_ads [--recriar]|"
+              "coletar_snapshot <conta_id> <canal>|"
               "backfill <conta_id> <canal> <inicio> <fim>|"
               "analisar_variacao [conta_id]|rotina_diaria|resumo_kpis]")

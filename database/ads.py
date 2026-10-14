@@ -10,7 +10,7 @@ CTR, CPC), que são recalculados a partir dos valores brutos somados, não
 a média dos percentuais diários.
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from database.conexao_supabase import obter_conexao
 from database.esquema import criar_tabelas
@@ -324,3 +324,42 @@ def obter_anuncios(
             "units_quantity": linha["units_quantity"],
         })
     return resultado
+
+
+def obter_campanhas_diarias(dias: int = 90) -> list[dict]:
+    """
+    Linhas DIÁRIAS de campanhas (uma por conta, campanha e dia) dos últimos
+    `dias` dias, sem agregar - alimenta a aba "Ads Campanhas" do Google Sheets
+    (ver integrations/google_sheets.py). Só leitura.
+    """
+    inicio = (date.today() - timedelta(days=dias)).isoformat()
+    sql = """
+        SELECT conta_id, data, campaign_id, nome, status, budget, roas_target, acos_target,
+               prints, clicks, cost, direct_amount, indirect_amount, total_amount,
+               direct_units_quantity, indirect_units_quantity, units_quantity
+        FROM ads_campanhas_diario
+        WHERE data >= %(inicio)s
+        ORDER BY data, conta_id, campaign_id
+    """
+    conexao = obter_conexao()
+    try:
+        return [dict(linha) for linha in conexao.execute(sql, {"inicio": inicio}).fetchall()]
+    finally:
+        conexao.close()
+
+
+def obter_anuncios_diarios(dias: int = 90) -> list[dict]:
+    """Linhas DIÁRIAS de anúncios patrocinados dos últimos `dias` dias (aba "Ads Anúncios"). Só leitura."""
+    inicio = (date.today() - timedelta(days=dias)).isoformat()
+    sql = """
+        SELECT conta_id, data, item_id, campaign_id, titulo, status,
+               prints, clicks, cost, direct_amount, indirect_amount, total_amount, units_quantity
+        FROM ads_anuncios_diario
+        WHERE data >= %(inicio)s
+        ORDER BY data, conta_id, item_id
+    """
+    conexao = obter_conexao()
+    try:
+        return [dict(linha) for linha in conexao.execute(sql, {"inicio": inicio}).fetchall()]
+    finally:
+        conexao.close()
