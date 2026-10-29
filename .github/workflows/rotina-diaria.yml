@@ -56,4 +56,6 @@ jobs:
           GOOGLE_SHEETS_ID: ${{ secrets.GOOGLE_SHEETS_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SALES_NAVIGATOR_URL: ${{ secrets.SALES_NAVIGATOR_URL }}
+          SALES_NAVIGATOR_SECRET: ${{ secrets.SALES_NAVIGATOR_SECRET }}
         run: python main.py rotina_diaria

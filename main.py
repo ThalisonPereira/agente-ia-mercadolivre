@@ -40,6 +40,7 @@ from database.ads import (
     obter_campanhas_diarias, obter_anuncios_diarios,
 )
 from integrations.google_sheets_ads import publicar_ads_no_sheets, criar_painel_ads
+from integrations.sales_navigator import sincronizar_estoque as enviar_estoque_sales_navigator
 from database.kpis import obter_totais_periodo, obter_data_mais_recente
 from database.estoque import obter_divergencias, obter_anuncios_em_risco, salvar_divergencias, salvar_risco
 from agents.analista_ia import analisar_e_salvar
@@ -459,6 +460,14 @@ def _rotina_diaria() -> bool:
         except Exception as erro:
             print(f"Falha ao publicar publicidade na planilha: {erro}")
 
+        # Saldo do Bling -> Sales Navigator (só roda se SALES_NAVIGATOR_URL/SECRET estiverem
+        # configurados; senão é pulado). Falha aqui não derruba a rotina.
+        try:
+            with metricas.medir_etapa_geral("sales_navigator_estoque"):
+                enviar_estoque_sales_navigator()
+        except Exception as erro:
+            print(f"Falha ao enviar estoque ao Sales Navigator: {erro}")
+
     print("\n" + metricas.relatorio())
 
     contas_com_falha = [r for r in resultados if not r.sucesso]
@@ -600,6 +609,10 @@ if __name__ == "__main__":
 
     elif comando == "publicar_ads_sheets":
         _publicar_ads_na_planilha()
+
+    elif comando == "enviar_estoque_sales_navigator":
+        # --simular: só lê o banco e conta, sem rede.
+        enviar_estoque_sales_navigator(simular="--simular" in sys.argv)
 
     elif comando == "criar_painel_ads":
         # Cria a aba "Painel Ads" (só se ainda não existir; --recriar apaga e refaz).

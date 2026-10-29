@@ -159,6 +159,24 @@ def carregar_configuracao_turso() -> TursoConfig:
 
 
 @dataclass(frozen=True)
+class SalesNavigatorConfig:
+    """Endereço publicado do app Sales Navigator (Lovable) e o segredo do endpoint
+    /api/public/sync-estoque, que recebe o saldo de estoque do Bling."""
+
+    url_base: str
+    segredo: str
+
+
+def carregar_configuracao_sales_navigator() -> SalesNavigatorConfig:
+    """Lê SALES_NAVIGATOR_URL e SALES_NAVIGATOR_SECRET. Levanta ConfiguracaoInvalidaError se
+    qualquer uma faltar - o envio é opcional, o chamador trata isso como "não configurado"."""
+    url = _obter_variavel_obrigatoria("SALES_NAVIGATOR_URL").rstrip("/")
+    if not url.startswith("https://"):
+        raise ConfiguracaoInvalidaError("SALES_NAVIGATOR_URL deve começar com https://")
+    return SalesNavigatorConfig(url_base=url, segredo=_obter_variavel_obrigatoria("SALES_NAVIGATOR_SECRET"))
+
+
+@dataclass(frozen=True)
 class SupabaseConfig:
     """Connection string direta do Postgres do Supabase - novo banco de dados
     (substitui o Turso), pra permitir uma interface nova (Lovable) consumir
