@@ -41,6 +41,7 @@ from database.ads import (
 )
 from integrations.google_sheets_ads import publicar_ads_no_sheets, criar_painel_ads
 from integrations.sales_navigator import sincronizar_estoque as enviar_estoque_sales_navigator
+from integrations.sales_navigator_catalogo import sincronizar_catalogo as enviar_catalogo_sales_navigator
 from database.kpis import obter_totais_periodo, obter_data_mais_recente
 from database.estoque import obter_divergencias, obter_anuncios_em_risco, salvar_divergencias, salvar_risco
 from agents.analista_ia import analisar_e_salvar
@@ -613,6 +614,10 @@ if __name__ == "__main__":
     elif comando == "enviar_estoque_sales_navigator":
         # --simular: só lê o banco e conta, sem rede.
         enviar_estoque_sales_navigator(simular="--simular" in sys.argv)
+
+    elif comando == "enviar_catalogo_sales_navigator":
+        # --simular: lê o Bling e conta, sem enviar ao Sales Navigator. Não faz parte da rotina diária.
+        enviar_catalogo_sales_navigator(simular="--simular" in sys.argv)
 
     elif comando == "criar_painel_ads":
         # Cria a aba "Painel Ads" (só se ainda não existir; --recriar apaga e refaz).

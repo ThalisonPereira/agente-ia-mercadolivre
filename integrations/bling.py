@@ -189,6 +189,45 @@ class BlingClient:
 
         return todos_os_produtos
 
+    def _get_com_retry(self, caminho: str, params: dict | None = None) -> requests.Response:
+        """GET com espera e nova tentativa em 429 (limite de chamadas do Bling)."""
+        headers = {"Authorization": f"Bearer {self._token_valido()}"}
+        resposta = None
+        for tentativa in range(MAX_TENTATIVAS_RATE_LIMIT):
+            resposta = requests.get(f"{BASE_URL}{caminho}", headers=headers, params=params, timeout=20)
+            if resposta.status_code != 429:
+                return resposta
+            time.sleep(1.0 * (tentativa + 1))
+        return resposta
+
+    def listar_vinculos_fornecedor(self) -> list[dict]:
+        """
+        Vínculos produto x fornecedor (GET /produtos/fornecedores): cada item traz
+        produto.id, fornecedor.id (só o ID, sem o nome) e 'padrao' (fornecedor padrão).
+        Levanta RuntimeError se alguma página falhar - dado parcial não é aceitável aqui.
+        """
+        vinculos: list[dict] = []
+        pagina = 1
+        while True:
+            resposta = self._get_com_retry("/produtos/fornecedores", {"pagina": pagina, "limite": REGISTROS_POR_PAGINA})
+            if resposta.status_code != 200:
+                raise RuntimeError(f"Erro ao buscar vínculos de fornecedor (página {pagina}, status {resposta.status_code})")
+            dados = resposta.json().get("data", [])
+            vinculos.extend(dados)
+            if len(dados) < REGISTROS_POR_PAGINA:
+                return vinculos
+            pagina += 1
+            time.sleep(PAUSA_ENTRE_REQUISICOES)
+
+    def obter_nome_contato(self, contato_id: int | str) -> str | None:
+        """Nome do contato (fornecedor) pelo ID - exige o escopo de Contatos (leitura)."""
+        resposta = self._get_com_retry(f"/contatos/{contato_id}")
+        if resposta.status_code == 404:
+            return None
+        if resposta.status_code != 200:
+            raise RuntimeError(f"Erro ao buscar contato {contato_id} (status {resposta.status_code})")
+        return (resposta.json().get("data") or {}).get("nome") or None
+
     # ------------------------------------------------------------------
     # Leitura de pedidos de venda (cruzamento com o pedido do Mercado Livre)
     # ------------------------------------------------------------------
