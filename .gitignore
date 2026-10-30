@@ -23,3 +23,6 @@ config/google_service_account.json
 
 # Configuração local do Claude Code (específica desta máquina)
 .claude/settings.local.json
+
+# Logs locais (agendador do Windows)
+logs/

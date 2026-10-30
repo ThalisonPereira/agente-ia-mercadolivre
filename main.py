@@ -640,6 +640,35 @@ if __name__ == "__main__":
             sincronizar_intervalo(sys.argv[2], sys.argv[3], vendas_bling_local.abrir(), BlingClient(),
                                   ResolvedorDatas(lambda conta: obter_adaptador(conta, "mercado_livre")))
 
+    elif comando == "enviar_vendas_sales_navigator":
+        # Envia o arquivo local de vendas ao Sales Navigator. --simular só conta, sem rede.
+        # Uso: python main.py enviar_vendas_sales_navigator AAAA-MM-DD AAAA-MM-DD [--simular]
+        if len(sys.argv) < 4:
+            print("Uso: python main.py enviar_vendas_sales_navigator <data_inicial> <data_final> [--simular]")
+        else:
+            from integrations.sales_navigator_vendas import sincronizar_vendas
+            sincronizar_vendas(sys.argv[2], sys.argv[3], simular="--simular" in sys.argv)
+
+    elif comando == "rotina_vendas_bling":
+        # Rotina diária (agendador do Windows): coleta os últimos 21 dias de registro no Bling (pega o atraso de
+        # registro e os cancelamentos) e envia ao Sales Navigator as vendas dos últimos 60 dias pela data real.
+        # Sai com código 1 se algo falhar. --simular não envia. Uso: python main.py rotina_vendas_bling [--simular]
+        from database import vendas_bling_local
+        from integrations.bling_vendas_sync import sincronizar_intervalo
+        from integrations.data_venda import ResolvedorDatas
+        from integrations.sales_navigator_vendas import sincronizar_vendas
+        hoje = date.today()
+        try:
+            con = vendas_bling_local.abrir()
+            r = sincronizar_intervalo((hoje - timedelta(days=21)).isoformat(), hoje.isoformat(), con, BlingClient(),
+                                      ResolvedorDatas(lambda conta: obter_adaptador(conta, "mercado_livre")))
+            if r.get("falhas"):
+                print(f"ATENÇÃO: {r['falhas']} pedido(s) falharam na coleta e serão tentados de novo na próxima execução.")
+            sincronizar_vendas((hoje - timedelta(days=60)).isoformat(), hoje.isoformat(), con=con, simular="--simular" in sys.argv)
+        except Exception as erro:
+            print(f"FALHA na rotina de vendas do Bling: {erro}")
+            sys.exit(1)
+
     elif comando == "conferir_vendas_bling":
         # Compara o arquivo local com o agente, pela data real da venda.
         if len(sys.argv) < 4:
