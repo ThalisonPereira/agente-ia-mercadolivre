@@ -619,6 +619,41 @@ if __name__ == "__main__":
         # --simular: lê o Bling e conta, sem enviar ao Sales Navigator. Não faz parte da rotina diária.
         enviar_catalogo_sales_navigator(simular="--simular" in sys.argv)
 
+    elif comando == "simular_vendas_bling":
+        # Só leitura: coleta os pedidos do Bling no período e compara o Mercado Livre com o agente.
+        # Uso: python main.py simular_vendas_bling AAAA-MM-DD AAAA-MM-DD
+        if len(sys.argv) < 4:
+            print("Uso: python main.py simular_vendas_bling <data_inicial> <data_final>")
+        else:
+            from integrations.bling_vendas_canais import simular_e_conferir
+            simular_e_conferir(sys.argv[2], sys.argv[3])
+
+    elif comando == "coletar_vendas_bling":
+        # Etapa 1: lê o Bling e o ML (só leitura) e grava apenas no arquivo local dados_locais/vendas_bling.db.
+        # Uso: python main.py coletar_vendas_bling AAAA-MM-DD AAAA-MM-DD   (retomável: pode repetir o comando)
+        if len(sys.argv) < 4:
+            print("Uso: python main.py coletar_vendas_bling <data_inicial> <data_final>")
+        else:
+            from database import vendas_bling_local
+            from integrations.bling_vendas_sync import sincronizar_intervalo
+            from integrations.data_venda import ResolvedorDatas
+            sincronizar_intervalo(sys.argv[2], sys.argv[3], vendas_bling_local.abrir(), BlingClient(),
+                                  ResolvedorDatas(lambda conta: obter_adaptador(conta, "mercado_livre")))
+
+    elif comando == "conferir_vendas_bling":
+        # Compara o arquivo local com o agente, pela data real da venda.
+        if len(sys.argv) < 4:
+            print("Uso: python main.py conferir_vendas_bling <data_inicial> <data_final>")
+        else:
+            from database import vendas_bling_local
+            from database.conexao_supabase import obter_conexao
+            from integrations.bling_vendas_sync import conferir_com_agente
+            conexao = obter_conexao()
+            try:
+                conferir_com_agente(sys.argv[2], sys.argv[3], vendas_bling_local.abrir(), conexao)
+            finally:
+                conexao.close()
+
     elif comando == "criar_painel_ads":
         # Cria a aba "Painel Ads" (só se ainda não existir; --recriar apaga e refaz).
         criar_painel_ads([c["conta_id"] for c in obter_contas_ativas()], recriar="--recriar" in sys.argv)

@@ -277,6 +277,36 @@ class BlingClient:
 
         return todos_os_pedidos
 
+    def listar_cabecalhos_pedidos_estrito(self, data_inicial: str, data_final: str) -> list[dict]:
+        """
+        Cabeçalhos dos pedidos de venda entre as datas ('AAAA-MM-DD', inclusive). Diferente de
+        listar_pedidos_vendas, falha com RuntimeError se qualquer página der erro (dado parcial
+        de vendas não é aceitável) e espera/tenta de novo em 429.
+        """
+        pedidos: list[dict] = []
+        pagina = 1
+        while True:
+            resposta = self._get_com_retry("/pedidos/vendas", {
+                "pagina": pagina, "limite": REGISTROS_POR_PAGINA,
+                "dataInicial": data_inicial, "dataFinal": data_final,
+            })
+            if resposta.status_code != 200:
+                raise RuntimeError(f"Erro ao listar pedidos de venda (página {pagina}, status {resposta.status_code})")
+            dados = resposta.json().get("data", [])
+            pedidos.extend(dados)
+            if len(dados) < REGISTROS_POR_PAGINA:
+                return pedidos
+            pagina += 1
+            time.sleep(PAUSA_ENTRE_REQUISICOES)
+
+    def obter_pedido_venda(self, pedido_id: int | str) -> dict:
+        """Detalhe de um pedido de venda (itens, totais, taxas). Contém dados do comprador: quem chama
+        deve copiar só os campos de negócio e descartar o resto."""
+        resposta = self._get_com_retry(f"/pedidos/vendas/{pedido_id}")
+        if resposta.status_code != 200:
+            raise RuntimeError(f"Erro ao buscar o pedido {pedido_id} (status {resposta.status_code})")
+        return resposta.json().get("data") or {}
+
     # ------------------------------------------------------------------
     # Gerenciamento de token (mesmo padrão de MercadoLivreCanal)
     # ------------------------------------------------------------------
