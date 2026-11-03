@@ -53,6 +53,10 @@ def abrir(caminho: Path | str | None = None) -> sqlite3.Connection:
     con = sqlite3.connect(str(caminho))
     con.row_factory = sqlite3.Row
     con.executescript(ESQUEMA)
+    # Coluna acrescentada depois da primeira versão: de onde veio o líquido (NULL/'bling' = taxas do pedido do Bling).
+    if "liquido_origem" not in {r[1] for r in con.execute("PRAGMA table_info(pedidos)")}:
+        con.execute("ALTER TABLE pedidos ADD COLUMN liquido_origem TEXT")
+        con.commit()
     return con
 
 

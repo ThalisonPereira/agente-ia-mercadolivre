@@ -664,6 +664,18 @@ if __name__ == "__main__":
                                       ResolvedorDatas(lambda conta: obter_adaptador(conta, "mercado_livre")))
             if r.get("falhas"):
                 print(f"ATENÇÃO: {r['falhas']} pedido(s) falharam na coleta e serão tentados de novo na próxima execução.")
+            # Pedidos do ML em que o Bling não trouxe taxa: usa a comissão e o frete que o agente já guarda.
+            # Falha aqui não impede o envio (o pedido só continua como "Líquido ausente").
+            try:
+                from database.conexao_supabase import obter_conexao as _conexao_agente
+                from integrations.liquido_agente import preencher_liquido_pelo_agente
+                _ag = _conexao_agente()
+                try:
+                    preencher_liquido_pelo_agente(con, _ag)
+                finally:
+                    _ag.close()
+            except Exception as erro_liquido:
+                print(f"ATENÇÃO: não foi possível preencher o líquido pelo agente: {erro_liquido}")
             sincronizar_vendas((hoje - timedelta(days=60)).isoformat(), hoje.isoformat(), con=con, simular="--simular" in sys.argv)
         except Exception as erro:
             print(f"FALHA na rotina de vendas do Bling: {erro}")
