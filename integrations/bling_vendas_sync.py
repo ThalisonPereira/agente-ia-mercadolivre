@@ -16,14 +16,18 @@ from integrations.bling_vendas_canais import SITUACOES_CONTAM, canal_da_loja, it
 from integrations.data_venda import ORIGEM_APROX, ResolvedorDatas
 
 
+DIAS_REVER_TAXAS = 30
+
+
 def sincronizar_periodo(data_inicial: str, data_final: str, con, bling, resolvedor: ResolvedorDatas,
-                        workers: int = 2, pausa: float = 0.35, log=print) -> dict:
+                        workers: int = 2, pausa: float = 0.35, log=print, hoje: date | None = None) -> dict:
     """
     Sincroniza um período. O detalhe (uma chamada por pedido) só é buscado para pedido que conta como venda e
     ainda não foi salvo; dos já salvos só a situação é atualizada pelo cabeçalho (barato), assim cancelamentos
     posteriores são pegos. Cada pedido é gravado inteiro quando chega: uma interrupção só obriga a repetir o comando.
     """
     resumo = defaultdict(int)
+    hoje = hoje or date.today()
     cabecalhos = bling.listar_cabecalhos_pedidos_estrito(data_inicial, data_final)
     a_buscar = []
     for cab in cabecalhos:
@@ -31,11 +35,16 @@ def sincronizar_periodo(data_inicial: str, data_final: str, con, bling, resolved
         canal, usa = canal_da_loja((cab.get("loja") or {}).get("id"))
         conta = (cab.get("situacao") or {}).get("id") in SITUACOES_CONTAM
         existente = loja_local.obter_pedido(con, cab["id"])
-        if not conta or (existente is not None and existente["detalhe_ok"]):
+        # O Bling só preenche comissão e frete quando o pedido chega a "Atendido": um pedido salvo antes disso fica
+        # sem taxa para sempre se o detalhe não for buscado de novo. Refaz o detalhe (até 30 dias) enquanto faltar.
+        refazer = (conta and usa and existente is not None and existente["detalhe_ok"] and existente["taxas_ausentes"]
+                   and (hoje - date.fromisoformat(existente["data_bling"] or hoje.isoformat())).days <= DIAS_REVER_TAXAS)
+        if not conta or (existente is not None and existente["detalhe_ok"] and not refazer):
             loja_local.salvar_cabecalho(con, cab, canal, usa, conta)
             resumo["so_cabecalho"] += 1
         else:
             a_buscar.append(cab)
+            resumo["taxas_revistas"] += int(refazer)
 
     def buscar(cab):
         # Quedas de rede passageiras (ou do banco de tokens) são comuns: tenta 3 vezes antes de desistir do pedido.
@@ -62,7 +71,13 @@ def sincronizar_periodo(data_inicial: str, data_final: str, con, bling, resolved
                     loja_local.salvar_cabecalho(con, cab, *canal_da_loja((cab.get("loja") or {}).get("id")), True)
                 else:
                     p = linhas[0]
-                    data, origem, ordens = resolvedor.resolver(p["canal"], p["numero_loja"], p["data"])
+                    antes = loja_local.obter_pedido(con, p["pedido_id"])
+                    if antes is not None and antes["data_venda"] and antes["data_origem"] not in (None, ORIGEM_APROX):
+                        # Já tem a data real: não repete a consulta ao Mercado Livre.
+                        data, origem = antes["data_venda"], antes["data_origem"]
+                        ordens = [x for x in (antes["ml_order_ids"] or "").split(",") if x]
+                    else:
+                        data, origem, ordens = resolvedor.resolver(p["canal"], p["numero_loja"], p["data"])
                     loja_local.salvar_pedido_completo(con, linhas, alertas, data, origem, ordens, detalhe.get("totalProdutos"))
                     resumo["detalhes_salvos"] += 1
                     resumo["data_aproximada"] += int(origem == ORIGEM_APROX and p["usa_em_vendas"])

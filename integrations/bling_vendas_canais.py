@@ -29,6 +29,7 @@ LOJAS = {
     205716062: ("TIKTOK", False),
     204193670: ("MANUAL/B2B", False),
     203953569: ("SITE", False),
+    203937085: ("MAGALU", False),  # identificado pelo CNPJ do intermediador (47.960.950/0001-21); fora da análise por ora
 }
 CANAL_OUTROS = "OUTROS"
 

@@ -140,6 +140,38 @@ def teste_pedido_ruim_nao_derruba_o_periodo_e_data_aproximada_e_refeita():
     assert r3["datas_refeitas"] == 1 and loja.obter_pedido(con, 4)["data_venda"] == "2026-09-03"
 
 
+def teste_taxas_que_o_bling_preenche_depois_sao_buscadas_de_novo_ate_30_dias():
+    from datetime import date
+
+    con = loja.abrir(":memory:")
+    novo = cab(6, 203930853, 6, "2000015555", data="2026-10-30")  # Em aberto: ainda sem taxa
+    antigo = cab(7, 203930853, 6, "2000015556", data="2026-08-01", numero=7)
+    sem_taxa = {"taxaComissao": 0, "custoFrete": 0}
+    bling = BlingFalso([novo, antigo], {6: det(novo, taxas=sem_taxa), 7: det(antigo, taxas=sem_taxa)})
+    ad = AdaptadorFalso(pacotes={"2000015555": {"date_created": "2026-10-30T09:00:00-03:00", "orders": [{"id": 1}]},
+                                 "2000015556": {"date_created": "2026-08-01T09:00:00-03:00", "orders": [{"id": 2}]}})
+    kw = dict(workers=1, pausa=0, log=lambda *_: None, hoje=date(2026, 11, 3))
+    sync.sincronizar_periodo("2026-07-01", "2026-11-03", con, bling, resolvedor(ad), **kw)
+    assert loja.obter_pedido(con, 6)["taxas_ausentes"] == 1 and loja.obter_pedido(con, 7)["taxas_ausentes"] == 1
+    chamadas_ml = len(ad.chamadas)
+    # o Bling passa a ter as taxas do pedido novo (virou Atendido) e do antigo
+    bling.detalhes[6] = det(novo, taxas={"taxaComissao": 10.0, "custoFrete": 5.0})
+    bling.detalhes[7] = det(antigo, taxas={"taxaComissao": 10.0, "custoFrete": 5.0})
+    bling.chamadas_detalhe.clear()
+    r = sync.sincronizar_periodo("2026-07-01", "2026-11-03", con, bling, resolvedor(ad), **kw)
+    assert bling.chamadas_detalhe == [6]  # só o de até 30 dias é revisto; o de agosto não
+    assert r["taxas_revistas"] == 1
+    p = loja.obter_pedido(con, 6)
+    assert p["taxas_ausentes"] == 0 and p["data_venda"] == "2026-10-30"
+    assert con.execute("SELECT valor_liquido FROM itens WHERE pedido_id = 6").fetchone()[0] == 85.0
+    assert len(ad.chamadas) == chamadas_ml  # não repetiu a consulta ao Mercado Livre
+    assert loja.obter_pedido(con, 7)["taxas_ausentes"] == 1
+    # sem novidade: depois que as taxas existem, nenhum detalhe é buscado de novo
+    bling.chamadas_detalhe.clear()
+    sync.sincronizar_periodo("2026-07-01", "2026-11-03", con, bling, resolvedor(ad), **kw)
+    assert bling.chamadas_detalhe == []
+
+
 def teste_canais_fora_da_analise_ficam_guardados_mas_nao_entram_nos_totais():
     con = loja.abrir(":memory:")
     c = cab(5, 205673455, 9, "702-1234567-1234567")
