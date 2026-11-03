@@ -681,6 +681,13 @@ if __name__ == "__main__":
         except Exception as erro:
             print(f"FALHA na rotina de vendas do Bling: {erro}")
             sys.exit(1)
+        # Saldo do Bling -> Sales Navigator (a rotina diária do GitHub deixou de gravá-lo; esta roda de hora em hora).
+        # Falha aqui aparece como código de saída 1 no agendador, mas só depois das vendas já terem sido enviadas.
+        try:
+            enviar_estoque_sales_navigator(simular="--simular" in sys.argv)
+        except Exception as erro:
+            print(f"FALHA ao enviar o estoque ao Sales Navigator: {erro}")
+            sys.exit(1)
 
     elif comando == "conferir_vendas_bling":
         # Compara o arquivo local com o agente, pela data real da venda.
