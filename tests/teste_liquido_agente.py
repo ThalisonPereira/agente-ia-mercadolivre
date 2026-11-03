@@ -88,6 +88,47 @@ def teste_depois_de_preenchido_nao_e_mais_candidato_e_consulta_em_lotes():
     assert r2["candidatos"] == 0 and len(agente.consultas) == 1
 
 
+def pedido_com_taxa_do_bling(con, pid, bruto, taxas_bling, ml_ids=("9001",), canal="ML WC", data="2026-10-20"):
+    """Pedido em que o Bling trouxe taxa (líquido = bruto - taxas_bling), já com taxas_ausentes = 0."""
+    pedido(con, pid, canal, [bruto], taxas_ausentes=False, ml_ids=ml_ids)
+    con.execute("UPDATE itens SET valor_liquido = ? WHERE pedido_id = ?", (round(bruto - taxas_bling, 2), pid))
+    con.execute("UPDATE pedidos SET data_bling = ? WHERE pedido_id = ?", (data, pid))
+    con.commit()
+
+
+def teste_completa_taxa_incompleta_do_bling_e_nunca_reduz():
+    from datetime import date
+
+    con = loja.abrir(":memory:")
+    pedido_com_taxa_do_bling(con, 20, 1760.0, 127.45, ml_ids=("1",))          # Bling só com o frete; agente 290,40 + 127,45
+    pedido_com_taxa_do_bling(con, 21, 500.0, 90.0, ml_ids=("2",))             # Bling igual ao agente: não mexe
+    pedido_com_taxa_do_bling(con, 22, 500.0, 150.0, ml_ids=("3",))            # Bling cobra MAIS que o agente: não reduz
+    pedido_com_taxa_do_bling(con, 23, 500.0, 90.0, ml_ids=("4",))             # diferença de R$ 1 (dentro da tolerância)
+    agente = AgenteFalso({"1": (290.40, 127.45, 1), "2": (60.0, 30.0, 1), "3": (60.0, 30.0, 1), "4": (61.0, 30.0, 1)})
+    r = la.completar_liquido_pelo_agente(con, agente, hoje=date(2026, 11, 3), log=lambda *_: None)
+    assert r == {"candidatos": 4, "completados": 1, "sem_dado_no_agente": 0, "taxa_maior_que_bruto": 0}
+    assert liquidos(con, 20) == [1342.15]                  # 1760 - (290,40 + 127,45)
+    assert liquidos(con, 21) == [410.0] and liquidos(con, 22) == [350.0] and liquidos(con, 23) == [410.0]
+    assert loja.obter_pedido(con, 20)["liquido_origem"] == la.ORIGEM_AGENTE
+    # segunda passada: o completado não é mais candidato
+    assert la.completar_liquido_pelo_agente(con, agente, hoje=date(2026, 11, 3), log=lambda *_: None)["candidatos"] == 3
+
+
+def teste_completar_respeita_o_limite_de_dias_e_dados_ausentes():
+    from datetime import date
+
+    con = loja.abrir(":memory:")
+    pedido_com_taxa_do_bling(con, 30, 1000.0, 100.0, ml_ids=("5",), data="2026-08-01")   # antigo
+    pedido_com_taxa_do_bling(con, 31, 1000.0, 100.0, ml_ids=("6",), data="2026-10-30")   # recente, mas o agente não tem
+    pedido_com_taxa_do_bling(con, 32, 100.0, 10.0, ml_ids=("7",), data="2026-10-30")     # taxa do agente maior que o bruto
+    agente = AgenteFalso({"5": (300.0, 0.0, 1), "7": (80.0, 40.0, 1)})
+    r = la.completar_liquido_pelo_agente(con, agente, dias=30, hoje=date(2026, 11, 3), log=lambda *_: None)
+    assert r == {"candidatos": 2, "completados": 0, "sem_dado_no_agente": 1, "taxa_maior_que_bruto": 1}
+    assert liquidos(con, 30) == [900.0]                     # fora da janela de 30 dias: intocado
+    r_tudo = la.completar_liquido_pelo_agente(con, agente, dias=None, hoje=date(2026, 11, 3), log=lambda *_: None)
+    assert r_tudo["candidatos"] == 3 and r_tudo["completados"] == 1 and liquidos(con, 30) == [700.0]
+
+
 def teste_banco_antigo_ganha_a_coluna_sem_perder_dados():
     import sqlite3
 

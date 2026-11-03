@@ -668,10 +668,11 @@ if __name__ == "__main__":
             # Falha aqui não impede o envio (o pedido só continua como "Líquido ausente").
             try:
                 from database.conexao_supabase import obter_conexao as _conexao_agente
-                from integrations.liquido_agente import preencher_liquido_pelo_agente
+                from integrations.liquido_agente import completar_liquido_pelo_agente, preencher_liquido_pelo_agente
                 _ag = _conexao_agente()
                 try:
                     preencher_liquido_pelo_agente(con, _ag)
+                    completar_liquido_pelo_agente(con, _ag, dias=60)  # Bling com só o frete ou só a comissão
                 finally:
                     _ag.close()
             except Exception as erro_liquido:
