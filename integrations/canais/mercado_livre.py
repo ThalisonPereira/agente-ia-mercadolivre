@@ -451,7 +451,8 @@ class MercadoLivreCanal:
             self._metricas.registrar_retry(self.conta_id, rotulo)
 
     def _get_com_retry(
-        self, url: str, params: dict, timeout: int = 15, headers_extra: dict | None = None, rotulo: str | None = None
+        self, url: str, params: dict, timeout: int = 15, headers_extra: dict | None = None, rotulo: str | None = None,
+        repetir_403: bool = False,
     ) -> requests.Response:
         """
         GET com retry automático em caso de rate limit (429) ou erro
@@ -466,18 +467,23 @@ class MercadoLivreCanal:
         Conta cada tentativa real enviada (inclusive retries), não só a
         chamada lógica - reflete o volume de requisições de verdade contra
         a API, relevante pra avaliação de rate limit.
+
+        `repetir_403=True` trata também o 403 como temporário (espera 5s, 10s, 20s...): o ML às vezes devolve
+        403 passageiro ao IP do servidor (visto no GitHub Actions em /items?ids=, com o mesmo lote respondendo
+        200 minutos depois). Só use em endpoints em que um 403 real (sem permissão) não é esperado.
         """
         headers = {**self._cabecalho(), **(headers_extra or {})}
         for tentativa in range(MAX_TENTATIVAS_RATE_LIMIT):
             if rotulo:
                 self._registrar_chamada(rotulo)
             resposta = self._sessao.get(url, headers=headers, params=params, timeout=timeout)
-            if resposta.status_code != 429 and resposta.status_code < 500:
+            temporario_403 = repetir_403 and resposta.status_code == 403
+            if resposta.status_code != 429 and resposta.status_code < 500 and not temporario_403:
                 return resposta
 
             if rotulo:
                 self._registrar_retry(rotulo)
-            espera = int(resposta.headers.get("Retry-After", 2 ** (tentativa + 1)))
+            espera = int(resposta.headers.get("Retry-After", 5 * 2 ** tentativa if temporario_403 else 2 ** (tentativa + 1)))
             print(f"Erro temporário da API do Mercado Livre ({resposta.status_code}). "
                   f"Aguardando {espera}s antes de tentar de novo...")
             time.sleep(espera)
@@ -511,7 +517,8 @@ class MercadoLivreCanal:
     def _obter_detalhes_itens(self, item_ids: list[str]) -> list[dict]:
         detalhes: list[dict] = []
         for lote in _em_lotes(item_ids):
-            resposta = self._get_com_retry(f"{BASE_URL}/items", params={"ids": ",".join(lote)}, rotulo="itens_detalhes")
+            resposta = self._get_com_retry(f"{BASE_URL}/items", params={"ids": ",".join(lote)}, rotulo="itens_detalhes",
+                                              repetir_403=True)
             resposta.raise_for_status()
             for entrada in resposta.json():
                 if entrada.get("code") == 200:
