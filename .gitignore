@@ -26,3 +26,6 @@ config/google_service_account.json
 
 # Logs locais (agendador do Windows)
 logs/
+
+# planilhas geradas com dados reais (Central de Ads etc.)
+dados_locais/*.xlsx
