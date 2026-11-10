@@ -2,10 +2,12 @@
 Agente de IA para E-commerce (multi-conta/multi-canal) - Ponto de entrada principal.
 """
 
+import json
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 from config.settings import (
     carregar_configuracao_sheets,
@@ -487,6 +489,53 @@ def _rotina_diaria() -> bool:
 DIAS_ADS_PLANILHA = 90
 
 
+# Pega-atraso (agendador do Windows): o "schedule" do GitHub Actions atrasa ou descarta execuções (em 10/11/2026 a rotina
+# das 01:00/04:00 não rodou e a anterior saiu ~10 h atrasada). Se ontem ainda não tem snapshot em alguma conta ativa,
+# roda a rotina completa daqui. Só a partir das 10h (o Mercado Ads só fecha o dia por volta desse horário) e no máximo
+# 2 tentativas por dia, para uma falha repetida não reexecutar a rotina inteira a cada hora.
+HORA_MINIMA_PEGA_ATRASO = 10
+MAX_TENTATIVAS_PEGA_ATRASO = 2
+MARCADOR_PEGA_ATRASO = Path(__file__).resolve().parent / "dados_locais" / "pega_atraso.json"
+
+
+def _pega_atraso(simular: bool = False, agora: datetime | None = None, marcador: Path | None = None,
+                 contas=None, datas_existentes=None, rotina=None) -> bool:
+    """True se está em dia ou se a rotina completa rodou com sucesso; False só se a rotina rodou e falhou."""
+    agora = agora or datetime.now()
+    marcador = marcador or MARCADOR_PEGA_ATRASO
+    contas = obter_contas_ativas() if contas is None else contas
+    datas_existentes = datas_existentes or obter_datas_existentes
+    rotina = rotina or _rotina_diaria
+    ontem = (agora.date() - timedelta(days=1)).isoformat()
+
+    faltando = [c["conta_id"] for c in contas if ontem not in datas_existentes(c["conta_id"])]
+    if not faltando:
+        print(f"Pega-atraso: {ontem} já está coletado em todas as contas.")
+        return True
+    if agora.hour < HORA_MINIMA_PEGA_ATRASO:
+        print(f"Pega-atraso: faltam {ontem} em {faltando}, mas só roda a partir das {HORA_MINIMA_PEGA_ATRASO}h (Ads ainda não fechou).")
+        return True
+
+    estado = {}
+    try:
+        estado = json.loads(marcador.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    tentativas = estado.get("tentativas", 0) if estado.get("dia") == ontem else 0
+    if tentativas >= MAX_TENTATIVAS_PEGA_ATRASO:
+        print(f"ATENÇÃO: pega-atraso já tentou {tentativas}x para {ontem} (contas sem dado: {faltando}); não tenta de novo hoje. "
+              "Veja o log e rode 'python main.py rotina_diaria' à mão.")
+        return True
+    if simular:
+        print(f"[simulação] Pega-atraso rodaria a rotina diária: faltam {ontem} em {faltando} (tentativa {tentativas + 1}).")
+        return True
+
+    marcador.parent.mkdir(parents=True, exist_ok=True)
+    marcador.write_text(json.dumps({"dia": ontem, "tentativas": tentativas + 1, "em": agora.isoformat(timespec="seconds")}), encoding="utf-8")
+    print(f"Pega-atraso: faltam {ontem} em {faltando}; rodando a rotina diária (tentativa {tentativas + 1}/{MAX_TENTATIVAS_PEGA_ATRASO}).")
+    return bool(rotina())
+
+
 def _publicar_ads_na_planilha() -> None:
     """Lê os últimos 90 dias de Ads do banco (só leitura) e regrava as abas brutas do Sheets."""
     campanhas = obter_campanhas_diarias(DIAS_ADS_PLANILHA)
@@ -688,6 +737,18 @@ if __name__ == "__main__":
         except Exception as erro:
             print(f"FALHA ao enviar o estoque ao Sales Navigator: {erro}")
             sys.exit(1)
+        # Se o GitHub não rodou a rotina diária de ontem, roda daqui (ver _pega_atraso).
+        try:
+            if not _pega_atraso(simular="--simular" in sys.argv):
+                print("FALHA: a rotina diária rodada pelo pega-atraso terminou com erro em alguma conta.")
+                sys.exit(1)
+        except Exception as erro:
+            print(f"FALHA no pega-atraso: {erro}")
+            sys.exit(1)
+
+    elif comando == "pega_atraso":
+        # Só o pega-atraso, sem a coleta de vendas. --simular só informa o que faria.
+        sys.exit(0 if _pega_atraso(simular="--simular" in sys.argv) else 1)
 
     elif comando == "conferir_vendas_bling":
         # Compara o arquivo local com o agente, pela data real da venda.
