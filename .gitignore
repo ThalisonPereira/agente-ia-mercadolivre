@@ -29,3 +29,4 @@ logs/
 
 # planilhas geradas com dados reais (Central de Ads etc.)
 dados_locais/*.xlsx
+dados_locais/*.json
