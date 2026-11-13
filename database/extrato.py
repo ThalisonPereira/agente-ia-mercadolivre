@@ -33,12 +33,12 @@ UPSERT_ITEM_VENDA = """
 INSERT INTO itens_venda (
     conta_id, pedido_id, item_id, sku, titulo, data_venda,
     quantidade, preco_venda, comissao_ml, frete_vendedor, status,
-    custo_unitario_capturado, numero_pedido_bling, capturado_em
+    custo_unitario_capturado, numero_pedido_bling, preco_venda_original, data_fechamento, capturado_em
 )
 VALUES (
     %(conta_id)s, %(pedido_id)s, %(item_id)s, %(sku)s, %(titulo)s, %(data_venda)s,
     %(quantidade)s, %(preco_venda)s, %(comissao_ml)s, %(frete_vendedor)s, %(status)s,
-    %(custo_unitario_capturado)s, %(numero_pedido_bling)s, %(capturado_em)s
+    %(custo_unitario_capturado)s, %(numero_pedido_bling)s, %(preco_venda_original)s, %(data_fechamento)s, %(capturado_em)s
 )
 ON CONFLICT(conta_id, pedido_id, item_id) DO UPDATE SET
     sku = excluded.sku,
@@ -51,6 +51,8 @@ ON CONFLICT(conta_id, pedido_id, item_id) DO UPDATE SET
     status = excluded.status,
     custo_unitario_capturado = excluded.custo_unitario_capturado,
     numero_pedido_bling = excluded.numero_pedido_bling,
+    preco_venda_original = COALESCE(excluded.preco_venda_original, itens_venda.preco_venda_original),
+    data_fechamento = COALESCE(excluded.data_fechamento, itens_venda.data_fechamento),
     capturado_em = excluded.capturado_em;
 """
 
@@ -101,6 +103,9 @@ def salvar_itens_venda_do_dia(conta_id: str, itens: list[dict], dia: date | None
                 # database/pedidos_bling.py) - None se o pedido ainda não
                 # chegou no Bling ou não veio da integração automática.
                 "numero_pedido_bling": obter_numero_bling(item["pedido_id"]),
+                # Valor antes de zerar por status e dia de fechamento (None se a coleta não trouxe - o UPSERT mantém o já gravado).
+                "preco_venda_original": item.get("preco_venda_original"),
+                "data_fechamento": item.get("data_fechamento"),
                 "capturado_em": agora,
             })
             for item in itens

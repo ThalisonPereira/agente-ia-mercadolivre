@@ -967,6 +967,9 @@ class MercadoLivreCanal:
             else:
                 status = "pendente"
 
+            fechamento = self._data_fechamento_em_brasilia(pedido)
+            data_fechamento = fechamento.isoformat() if fechamento else None
+
             if status in ("cancelado", "pendente"):
                 for item in itens:
                     resultado.append({
@@ -979,6 +982,8 @@ class MercadoLivreCanal:
                         "comissao_ml": 0.0,
                         "frete_vendedor": 0.0,
                         "status": status,
+                        "preco_venda_original": item.get("unit_price", 0) * item.get("quantity", 0),
+                        "data_fechamento": data_fechamento,
                     })
                 continue
 
@@ -1011,6 +1016,8 @@ class MercadoLivreCanal:
                     "comissao_ml": item.get("sale_fee", 0.0) * quantidade,
                     "frete_vendedor": frete_alocado,
                     "status": status,
+                    "preco_venda_original": preco_item,
+                    "data_fechamento": data_fechamento,
                 })
 
         return resultado

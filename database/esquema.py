@@ -500,6 +500,13 @@ _MIGRACOES_COLUNA = [
     # ML) - capturado no momento da gravação do item de venda, mesmo
     # princípio de custo_unitario_capturado (snapshot, não JOIN dinâmico).
     ("itens_venda", "numero_pedido_bling", "TEXT"),
+    # Valor do item (preço x quantidade) ANTES de zerar por status: pedido cancelado/pendente fica com preco_venda = 0
+    # (não conta em nenhum total), mas o Mercado Livre soma esses pedidos nas "vendas brutas" do dia - guardar o valor
+    # original permite mostrar "Cancelados" e conciliar o painel com o ML (11/2026: HC R$ 5.328 pagos + R$ 3.457 cancelados).
+    ("itens_venda", "preco_venda_original", "REAL"),
+    # Dia (calendário de Brasília, YYYY-MM-DD) em que o pedido foi fechado/cancelado (date_closed): é por essa data que o
+    # Mercado Livre conta o pedido no resumo de desempenho (itens_venda continua contando pela data de CRIAÇÃO).
+    ("itens_venda", "data_fechamento", "TEXT"),
 ]
 
 
