@@ -25,6 +25,7 @@ produto (e confirmar o campo de custo) antes de escrever a Parte 2
 import base64
 import json
 import secrets
+import threading
 import time
 from urllib.parse import urlencode
 
@@ -55,6 +56,11 @@ REGISTROS_POR_PAGINA = 100
 # margem de segurança bem menor que o limite (mesmo valor já comprovado no
 # projeto analista-estoque-ia).
 PAUSA_ENTRE_REQUISICOES = 0.4
+
+# O refresh token do Bling vale UMA vez: quem renova invalida o anterior. A coleta de vendas usa várias threads, e sem trava todas
+# renovavam juntas com o mesmo token (11/11/2026 20:00: invalid_grant e o banco ficou com um token morto, exigindo reautorizar).
+_LOCK_RENOVACAO = threading.Lock()
+TENTATIVAS_SALVAR_TOKEN = 5
 
 
 class BlingClient:
@@ -312,7 +318,19 @@ class BlingClient:
     # ------------------------------------------------------------------
 
     def _salvar_tokens(self, tokens: dict) -> None:
-        salvar_token(CONTA_ID_BLING, {**tokens, "obtido_em": time.time()})
+        """Grava o token NOVO com retentativas: o Bling já invalidou o anterior, então perder este (conexão que cai com o banco) exige
+        reautorizar o app. Se o banco não responder de jeito nenhum, o erro sobe com o token novo no texto do aviso."""
+        dados = {**tokens, "obtido_em": time.time()}
+        for tentativa in range(TENTATIVAS_SALVAR_TOKEN):
+            try:
+                salvar_token(CONTA_ID_BLING, dados)
+                return
+            except Exception as erro:  # noqa: BLE001 - qualquer falha de rede/banco merece nova tentativa
+                if tentativa == TENTATIVAS_SALVAR_TOKEN - 1:
+                    raise RuntimeError(f"Não foi possível salvar o token NOVO do Bling no banco ({erro}). O token anterior já foi invalidado: "
+                                       "reautorize com 'python main.py bling_passo1'.") from erro
+                print(f"Falha ao salvar o token do Bling ({erro}). Tentando de novo...")
+                time.sleep(2 ** tentativa)
 
     def _token_expirado(self, tokens: dict) -> bool:
         obtido_em = tokens.get("obtido_em", 0)
@@ -345,8 +363,21 @@ class BlingClient:
             )
 
         if self._token_expirado(tokens):
-            print("Access token do Bling expirado ou perto de expirar - renovando...")
-            tokens = self._renovar_tokens(tokens["refresh_token"])
-            print("Token renovado com sucesso.")
+            with _LOCK_RENOVACAO:
+                # outra thread pode ter renovado enquanto esta esperava a trava: relê do banco antes de renovar
+                tokens = obter_token(CONTA_ID_BLING) or tokens
+                if self._token_expirado(tokens):
+                    print("Access token do Bling expirado ou perto de expirar - renovando...")
+                    usado = tokens["refresh_token"]
+                    try:
+                        tokens = self._renovar_tokens(usado)
+                    except RuntimeError as erro:
+                        # outro PROCESSO (ex.: a rotina do GitHub) pode ter renovado primeiro: se o banco já tem um token novo, usa ele
+                        atual = obter_token(CONTA_ID_BLING) if "invalid_grant" in str(erro) else None
+                        if atual and atual.get("refresh_token") != usado and not self._token_expirado(atual):
+                            print("Outro processo já renovou o token do Bling; usando o token novo do banco.")
+                            return atual["access_token"]
+                        raise
+                    print("Token renovado com sucesso.")
 
         return tokens["access_token"]
