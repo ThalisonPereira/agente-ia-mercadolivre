@@ -480,8 +480,8 @@ class MercadoLivreCanal:
                 self._registrar_chamada(rotulo)
             try:
                 resposta = self._sessao.get(url, headers=headers, params=params, timeout=timeout)
-            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as erro:
-                # oscilação de rede/timeout: antes subia direto e virava dado vazio (ex.: visitas NULL); agora repete com espera
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError) as erro:
+                # oscilação de rede/timeout/conexão cortada no meio da resposta ('Connection broken', 10054): antes subia direto e virava dado vazio (ex.: visitas NULL); agora repete com espera
                 if tentativa == MAX_TENTATIVAS_RATE_LIMIT - 1:
                     raise
                 if rotulo:

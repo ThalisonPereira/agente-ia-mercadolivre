@@ -82,6 +82,14 @@ def teste_timeout_e_erro_de_conexao_sao_repetidos():
     assert c._get_com_retry("u", {}).status_code == 200 and c._sessao.chamadas == 3
 
 
+def teste_conexao_cortada_no_meio_da_resposta_tambem_e_repetida():
+    c = object.__new__(ml.MercadoLivreCanal)
+    c._metricas, c.conta_id = None, "t"
+    c._cabecalho = lambda: {}
+    c._sessao = Sessao([requests.exceptions.ChunkedEncodingError("Connection broken: ConnectionResetError(10054)")])
+    assert c._get_com_retry("u", {}).status_code == 200 and c._sessao.chamadas == 2
+
+
 def teste_erro_de_rede_persistente_sobe_na_ultima_tentativa():
     c = object.__new__(ml.MercadoLivreCanal)
     c._metricas, c.conta_id = None, "t"
