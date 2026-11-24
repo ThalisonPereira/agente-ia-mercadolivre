@@ -41,7 +41,12 @@ WHERE h_novo.data_snapshot = %(data_final)s
 LIMIAR_VARIACAO = 0.30
 
 
-def _variacao_percentual(anterior: float, atual: float) -> float:
+def _variacao_percentual(anterior: float | None, atual: float | None) -> float:
+    # visitas/vendas vazias (NULL) = a coleta daquele anúncio falhou no dia (ex.: 429 na API de visitas): sem dado dos
+    # dois lados não há variação a calcular. Tratar como 0 inventaria uma "Alta" de 100%; por isso fica em 0% (Estável).
+    # (22/11/2026: 1 anúncio da WC com visitas NULL derrubou a etapa 'variacao' com "int - NoneType".)
+    if anterior is None or atual is None:
+        return 0.0
     if anterior == 0:
         return 1.0 if atual > 0 else 0.0
     return (atual - anterior) / anterior
