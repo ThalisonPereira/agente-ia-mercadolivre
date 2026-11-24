@@ -45,6 +45,8 @@ PAUSA_ENTRE_VISITAS_SEGUNDOS = 0.3
 # degradação generalizada (ex: token inválido, rate limit em cascata),
 # tolerando só falhas isoladas/pontuais.
 LIMITE_FALHA_VISITAS_ABORTA = 0.2
+# Esperas (s) entre as rodadas de repetição dos itens cujas visitas falharam na 1ª passada (ver _repetir_visitas_falhas).
+ESPERAS_REPETIR_VISITAS = (5, 20)
 
 MAX_TENTATIVAS_RATE_LIMIT = 5
 
@@ -476,7 +478,18 @@ class MercadoLivreCanal:
         for tentativa in range(MAX_TENTATIVAS_RATE_LIMIT):
             if rotulo:
                 self._registrar_chamada(rotulo)
-            resposta = self._sessao.get(url, headers=headers, params=params, timeout=timeout)
+            try:
+                resposta = self._sessao.get(url, headers=headers, params=params, timeout=timeout)
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as erro:
+                # oscilação de rede/timeout: antes subia direto e virava dado vazio (ex.: visitas NULL); agora repete com espera
+                if tentativa == MAX_TENTATIVAS_RATE_LIMIT - 1:
+                    raise
+                if rotulo:
+                    self._registrar_retry(rotulo)
+                espera = 2 ** (tentativa + 1)
+                print(f"Erro de rede ao falar com o Mercado Livre ({type(erro).__name__}). Aguardando {espera}s antes de tentar de novo...")
+                time.sleep(espera)
+                continue
             temporario_403 = repetir_403 and resposta.status_code == 403
             if resposta.status_code != 429 and resposta.status_code < 500 and not temporario_403:
                 return resposta
@@ -534,6 +547,27 @@ class MercadoLivreCanal:
         )
         resposta.raise_for_status()
         return resposta.json().get("total_visits", 0)
+
+    def _repetir_visitas_falhas(self, visitas: dict, falhas: list[str], data_de: str, data_ate: str) -> list[str]:
+        """
+        Segunda chance, em série e com espera, para os itens que falharam na passada concorrente (rate limit passageiro:
+        em 22/11/2026 um anúncio da WC ficou com visitas NULL). Devolve os que continuam sem visita (seguem como None).
+        """
+        for espera in ESPERAS_REPETIR_VISITAS:
+            if not falhas:
+                break
+            time.sleep(espera)
+            ainda = []
+            for item_id in falhas:
+                try:
+                    visitas[item_id] = self._obter_visita_um_item(item_id, data_de, data_ate)
+                except Exception:  # noqa: BLE001 - continua sem visita e tenta de novo na próxima rodada
+                    ainda.append(item_id)
+                time.sleep(PAUSA_ENTRE_VISITAS_SEGUNDOS)
+            if len(ainda) < len(falhas):
+                print(f"[conta: {self.conta_id}] Visitas recuperadas na repetição: {len(falhas) - len(ainda)}/{len(falhas)}.")
+            falhas = ainda
+        return falhas
 
     def _verificar_falha_generalizada_visitas(self, falhas: list[str], total: int) -> None:
         """Se a proporção de falhas passar do limiar, aborta a conta (ver LIMITE_FALHA_VISITAS_ABORTA)."""
@@ -598,6 +632,9 @@ class MercadoLivreCanal:
                     print(f"[conta: {self.conta_id}] Falha ao coletar visitas do item {item_id}: {erro}")
                 time.sleep(PAUSA_ENTRE_VISITAS_SEGUNDOS)
             self._verificar_falha_generalizada_visitas(falhas, len(item_ids))
+            falhas = self._repetir_visitas_falhas(visitas, falhas, data_de, data_ate)
+            if falhas:
+                print(f"[conta: {self.conta_id}] {len(falhas)} item(ns) seguem sem visita depois da repetição: {falhas}")
             return visitas
 
         workers = min(workers, len(item_ids))
@@ -620,6 +657,9 @@ class MercadoLivreCanal:
                     print(f"[conta: {self.conta_id}] Falha ao coletar visitas do item {item_id}: {erro}")
 
         self._verificar_falha_generalizada_visitas(falhas, len(item_ids))
+        falhas = self._repetir_visitas_falhas(visitas, falhas, data_de, data_ate)
+        if falhas:
+            print(f"[conta: {self.conta_id}] {len(falhas)} item(ns) seguem sem visita depois da repetição: {falhas}")
         return visitas
 
     def _registrar_falha_item_visita(self) -> None:
