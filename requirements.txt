@@ -37,3 +37,6 @@ libsql-client>=0.3.1
 # de fusos instalada (a maioria dos Linux), mas é a rede de segurança pra
 # ambientes que não têm (ex: algumas instalações do Windows).
 tzdata
+
+# Windows: usa o repositório de certificados do sistema (antivírus com varredura HTTPS, ver config/__init__.py)
+truststore>=0.10.0; sys_platform == "win32"
